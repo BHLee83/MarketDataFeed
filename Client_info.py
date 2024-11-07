@@ -77,7 +77,7 @@ def cleanup_excel():
         sheet = None
         pythoncom.CoUninitialize()
     
-def get_excel_data(client_socket):
+def get_excel_data():
     """Excel 데이터 읽기"""
     global previous_data, sheet, workbook
     
@@ -108,9 +108,7 @@ def get_excel_data(client_socket):
         # 업데이트된 데이터가 있는 경우에만 전송
         if updated_data:
             return json.dumps(updated_data) + "\n"  # 구분자 추가
-            # client_socket.sendall(data.encode())  # 서버로 데이터 전송
-            # print("서버로 데이터 전송:", updated_data)
-        return None
+        return []
     
     except Exception as e:
         print(f"데이터 읽기 중 오류 발생: {str(e)}")
@@ -138,7 +136,7 @@ if __name__ == '__main__':
             
             # 데이터 지속 전송
             while True:
-                data = get_excel_data(client_socket)
+                data = get_excel_data()
                 if data:
                     client_socket.sendall(data.encode())  # 서버로 데이터 전송
                     print("서버로 데이터 전송:", data)
