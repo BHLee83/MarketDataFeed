@@ -1,0 +1,103 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "시스템 리소스 사용률",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "system_cpu_usage",
+          "legendFormat": "CPU 사용률"
+        },
+        {
+          "expr": "system_memory_usage",
+          "legendFormat": "메모리 사용률"
+        },
+        {
+          "expr": "system_disk_usage",
+          "legendFormat": "디스크 사용률"
+        }
+      ]
+    },
+    {
+      "title": "Kafka 파티션 지연",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "kafka_consumer_lag",
+          "legendFormat": "파티션-{{partition}}"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "title": "데이터 품질 메트릭",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "data_quality_invalid_ratio * 100",
+          "legendFormat": "오류율 (%)"
+        },
+        {
+          "expr": "increase(data_quality_total_messages[5m])",
+          "legendFormat": "처리량 (5분)"
+        },
+        {
+          "expr": "increase(data_quality_invalid_messages[5m])",
+          "legendFormat": "오류 건수 (5분)"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        }
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "마켓 데이터 모니터링",
+  "version": 0,
+  "weekStart": ""
+} 
