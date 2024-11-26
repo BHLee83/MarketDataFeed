@@ -22,15 +22,15 @@ class KafkaHandler:
         }
         return Producer(conf)
         
-    def send_market_data(self, data):
-        """시장 데이터를 Kafka로 전송"""
+    def send_data(self, data, topic):
+        """데이터를 Kafka로 전송"""
         try:
             # JSON 직렬화
             message = json.dumps(data)
             
             # Kafka로 전송
             self.producer.produce(
-                Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
+                topic,
                 value=message.encode('utf-8'),
                 callback=self._delivery_report
             )
@@ -42,7 +42,7 @@ class KafkaHandler:
             self.producer.flush()
             # 재시도
             self.producer.produce(
-                Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
+                topic,
                 value=message.encode('utf-8'),
                 callback=self._delivery_report
             )
@@ -63,6 +63,10 @@ class KafkaHandler:
             admin_client = AdminClient({'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS})
             topic_list = [NewTopic(
                 topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
+                num_partitions=3,
+                replication_factor=1
+            ), NewTopic(
+                topic=Config.KAFKA_TOPICS['PROCESSED_DATA'],
                 num_partitions=3,
                 replication_factor=1
             )]

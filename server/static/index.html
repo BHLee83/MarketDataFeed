@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>표 데이터 예제</title>
+</head>
+<body>
+    <h1>데이터 표</h1>
+    <table id="dataTable" border="1">
+        <thead>
+            <tr>
+                <th>월</th>
+                <th>값</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- 데이터가 여기에 추가됩니다 -->
+        </tbody>
+    </table>
+
+    <script>
+        async function fetchTableData() {
+            const response = await fetch('/api/processed-data');
+            if (!response.ok) {
+                throw new Error('네트워크 응답이 좋지 않습니다.');
+            }
+            const data = await response.json();
+            return data;
+        }
+
+        async function renderTable() {
+            try {
+                const tableData = await fetchTableData();
+                const tableBody = document.getElementById('dataTable').getElementsByTagName('tbody')[0];
+
+                tableData.labels.forEach((label, index) => {
+                    const row = tableBody.insertRow();
+                    const cell1 = row.insertCell(0);
+                    const cell2 = row.insertCell(1);
+                    cell1.textContent = label;
+                    cell2.textContent = tableData.values[index];
+                });
+            } catch (error) {
+                console.error('데이터를 가져오는 중 오류 발생:', error);
+            }
+        }
+
+        renderTable();
+    </script>
+</body>
+</html>

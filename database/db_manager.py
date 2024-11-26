@@ -49,10 +49,32 @@ class DatabaseManager:
                 cursor.close()
 
     def load_marketdata_meta(self) -> List[Dict]:
-        """마켓 메타데이터 로드"""
+        """마켓 메타 데이터 로드"""
         query = "SELECT * FROM marketdata_meta"
         with self.get_cursor() as cursor:
             cursor.execute(query)
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def load_marketdata_price_daily(self) -> List[Dict]:
+        """마켓 일별 데이터 로드"""
+        # query = "SELECT * FROM marketdata_daily"
+        # 임시 (구 테이블 참조)
+        query = "SELECT asset_name as item_code, base_date as timestamp, open_price as open, high_price as high, low_price as low, close_price as close, volume FROM market_data"
+        with self.get_cursor() as cursor:
+            cursor.execute(query)
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def load_marketdata_price_rt(self, start_date: date) -> List[Dict]:
+        """실시간 데이터 로드"""
+        query = """
+            SELECT * FROM marketdata_price_rt 
+            WHERE timestamp >= :start_date
+            ORDER BY timestamp
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute(query, start_date=start_date)
             columns = [col[0] for col in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
@@ -83,7 +105,7 @@ class DatabaseManager:
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def insert_to_marketdata_price_rt(self, data_list: List[Dict[str, Any]]):
-        """실시간 데이터 임시 테이블 일괄 저장"""
+        """실시간 데이터 테이블 일괄 저장"""
         query = """
             INSERT INTO marketdata_price_rt 
             (symbol, timestamp, price, volume)

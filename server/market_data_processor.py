@@ -3,6 +3,7 @@ from datetime import datetime
 import time
 from concurrent.futures import ThreadPoolExecutor
 from server.utils.logger import server_logger
+from config import Config
 
 class MarketDataProcessor:
     def __init__(self, client_data, dataset, kafka_handler):
@@ -29,7 +30,7 @@ class MarketDataProcessor:
             }
             
             # 실시간으로 Kafka에 전송
-            self.kafka_handler.send_market_data(processed_data)
+            self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'])
             
             # 배치 처리를 위해 데이터 추가 (DB 저장용)
             self.pending_data.append(processed_data)

@@ -17,6 +17,8 @@ from server.utils.logger import setup_logger
 from server.monitoring.system_monitor import SystemMonitor
 
 logger = setup_logger('servers')
+data_server = None
+processing_server = None
 
 def check_kafka_connection():
     """Kafka 연결 상태 확인"""
@@ -30,6 +32,16 @@ def check_kafka_connection():
         logger.error(f"Kafka 연결 실패: {str(e)}")
         return False
 
+def start_data_server(system_monitor):
+    """데이터 서버 시작"""
+    data_server = DataServer(monitor=system_monitor)
+    data_server.start()
+
+def start_processing_server():
+    """처리 서버 시작"""
+    processing_server = ProcessingServer()
+    processing_server.start()
+
 def start_servers():
     """서버 시작"""
     if not check_kafka_connection():
@@ -41,25 +53,31 @@ def start_servers():
         system_monitor = SystemMonitor()
         system_monitor.start_monitoring()
         
-        # 서버 인스턴스 생성 (모니터링 공유)
-        data_server = DataServer(monitor=system_monitor)
-        processing_server = ProcessingServer()
-        
         # 시그널 핸들러 설정
         def signal_handler(signum, frame):
             logger.info("종료 신호를 받았습니다. 서버를 종료합니다...")
             system_monitor.stop_monitoring()
-            data_server.stop()
-            processing_server.stop()
-            
+            if data_server:
+                data_server.stop()
+            if processing_server:
+                processing_server.stop()
+            return False
+        
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
         
-        # 서버 시작
+        # 서버를 스레드로 시작
         logger.info("데이터 서버와 처리 서버를 시작합니다...")
-        data_server.start()
-        processing_server.start()
-        
+        data_server_thread = threading.Thread(target=start_data_server, args=(system_monitor,))
+        processing_server_thread = threading.Thread(target=start_processing_server)
+
+        data_server_thread.start()
+        processing_server_thread.start()
+
+        # 메인 스레드에서 스레드가 종료될 때까지 대기
+        data_server_thread.join()
+        processing_server_thread.join()
+
         return True
         
     except Exception as e:
@@ -67,5 +85,7 @@ def start_servers():
         return False
 
 if __name__ == "__main__":
+    data_server = None
+    processing_server = None
     if not start_servers():
         sys.exit(1) 

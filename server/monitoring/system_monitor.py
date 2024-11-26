@@ -176,7 +176,7 @@ class SystemMonitor:
             
     def validate_data_format(self, data):
         """데이터 형식 검증"""
-        required_fields = ['source', 'timestamp', 'data_type', 'content']
+        required_fields = ['source', 'timestamp', 'dataType', 'content']
         return all(field in data for field in required_fields)
             
     def validate_data_values(self, data):
