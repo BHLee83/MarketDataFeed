@@ -13,7 +13,7 @@ import signal
 import threading
 from server.main_server import DataServer
 from server.processing_server import ProcessingServer
-from server.utils.logger import setup_logger
+from utils.logger import setup_logger
 from server.monitoring.system_monitor import SystemMonitor
 
 logger = setup_logger('servers')
@@ -80,6 +80,8 @@ def start_servers():
 
         return True
         
+    except KeyboardInterrupt:
+        signal_handler(signal.SIGINT, None)
     except Exception as e:
         logger.error(f"서버 시작 중 오류 발생: {str(e)}", exc_info=True)
         return False
