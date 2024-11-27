@@ -4,8 +4,8 @@ import threading
 import os
 import sys
 import psutil
+import signal
 from datetime import datetime
-# from flask import Flask, request, jsonify
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
@@ -15,8 +15,9 @@ from server.handlers.socket_handler import SocketHandler
 from server.market_data_processor import MarketDataProcessor
 from server.handlers.kafka_handler import KafkaHandler
 from confluent_kafka import Producer
-from server.monitoring import SystemMonitor
-from server.utils.logger import server_logger
+from server.monitoring.system_monitor import SystemMonitor
+from server.processing_server import ProcessingServer
+from utils.logger import server_logger
 
 
 # app = Flask(__name__)
@@ -101,7 +102,6 @@ class DataServer():
     
     def send_data_to_db(self, current_time):
         """데이터를 DB에 저장하는 메서드"""
-        print("데이터셋: ", self.dataset)
         new_data = [data for data in self.dataset if data['received_at'] > self.last_db_write]
         if new_data:
             prepared_data = self.marketdata_processor.prepare_db_data(new_data)
@@ -117,6 +117,7 @@ class DataServer():
         # 데이터셋의 첫 번째 데이터의 날짜를 기준으로 다음날인지 확인
         first_data_date = datetime.fromisoformat(self.dataset[0]['timestamp']).date()
         current_date = datetime.now().date()
+        current_time = time.time()
 
         if current_date > first_data_date:
             # 전송할 데이터와 남길 데이터 분리
@@ -131,6 +132,7 @@ class DataServer():
 
             # 데이터셋 비우고 남길 데이터만 유지
             self.dataset = data_to_keep
+            self.last_db_write = current_time
 
     def check_idle_time(self):
         """
@@ -251,28 +253,54 @@ class DataServer():
         
         server_logger.info("서버가 안전하게 종료되었습니다.")
 
+
+def start_data_server(system_monitor):
+    """데이터 서버 시작"""
+    data_server = DataServer(monitor=system_monitor)
+    data_server.start()
+
+def start_processing_server():
+    """처리 서버 시작"""
+    processing_server = ProcessingServer()
+    processing_server.start()
+
 if __name__ == "__main__":
-    server = None
+    """서버 시작"""
+    data_server = None
+    processing_server = None
+
     try:
-        server = DataServer()
-        server.start()
+        # 단일 모니터링 인스턴스 생성
+        system_monitor = SystemMonitor()
+        system_monitor.start_monitoring()
         
-        while server.running:
-            try:
-                client_socket, addr = server.server_socket.accept()
-                print(f"클라이언트 연결됨: {addr}")
-                
-                client_thread = threading.Thread(target=server.handle_client, args=(client_socket,))
-                client_thread.daemon = True
-                client_thread.start()
-            except socket.timeout:
-                continue  # 타임아웃 발생 시 계속 진행
-            except Exception as e:
-                if server.running:  # 정상 종료가 아닌 경우에만 에러 출력
-                    print(f"오류 발생: {e}")
-                
+        # 시그널 핸들러 설정
+        def signal_handler(signum, frame):
+            server_logger.info("종료 신호를 받았습니다. 서버를 종료합니다...")
+            system_monitor.stop_monitoring()
+            if data_server:
+                data_server.stop()
+            if processing_server:
+                processing_server.stop()
+            return False
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # 서버를 스레드로 시작
+        server_logger.info("데이터 서버와 처리 서버를 시작합니다...")
+        data_server_thread = threading.Thread(target=start_data_server, args=(system_monitor,))
+        processing_server_thread = threading.Thread(target=start_processing_server)
+
+        data_server_thread.start()
+        processing_server_thread.start()
+
+        # 메인 스레드에서 스레드가 종료될 때까지 대기
+        data_server_thread.join()
+        processing_server_thread.join()
+        
     except KeyboardInterrupt:
-        print("\n서버를 종료합니다...")
-    finally:
-        if server:
-            server.stop()
+        signal_handler(signal.SIGINT, None)
+
+    except Exception as e:
+        server_logger.error(f"서버 시작 중 오류 발생: {str(e)}", exc_info=True)
