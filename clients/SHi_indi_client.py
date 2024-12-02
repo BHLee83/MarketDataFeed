@@ -105,20 +105,21 @@ class SHiIndiClient(QMainWindow):
 
     def ReceiveRTData(self, RealType):
         if any([RealType == 'FC', RealType == 'MC']):
-            item_code = self.IndiTR.dynamicCall("GetSingleData(int)", 1)    # 단축코드
-            current_price = self.IndiTR.dynamicCall("GetSingleData(int)", 4)  # 현재가
-            current_vol = self.IndiTR.dynamicCall("GetSingleData(int)", 10)  # 단위체결량
+            item_code = self.IndiReal.dynamicCall("GetSingleData(int)", 1)    # 단축코드
+            current_price = self.IndiReal.dynamicCall("GetSingleData(int)", 4)  # 현재가
+            current_vol = self.IndiReal.dynamicCall("GetSingleData(int)", 10)  # 단위체결량
         elif any([RealType == 'MX', RealType == 'IC']):
-            item_code = self.IndiTR.dynamicCall("GetSingleData(int)", 0)    # 단축코드 or 업종코드
-            current_price = self.IndiTR.dynamicCall("GetSingleData(int)", 3)  # 현재가
-            current_vol = self.IndiTR.dynamicCall("GetSingleData(int)", 9)  # 단위체결량
+            item_code = self.IndiReal.dynamicCall("GetSingleData(int)", 0)    # 단축코드 or 업종코드
+            current_price = self.IndiReal.dynamicCall("GetSingleData(int)", 3)  # 현재가
+            current_vol = self.IndiReal.dynamicCall("GetSingleData(int)", 9)  # 단위체결량
         elif RealType == 'OC':
             print("데이터 수신됨. 작업 필요")
 
         data = [{'item_code': item_code, 'current_price': current_price, 'current_vol': current_vol}]
         print(f"수신데이터: {data}")
         processed_data = self.process_data(data)
-        self.send_to_server(processed_data)
+        if not self.send_to_server(processed_data):
+            self.connect_to_server()
 
     def ReceiveSysMsg(self, MsgCode):
         if MsgCode == '11':
