@@ -10,7 +10,6 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 from database.db_manager import DatabaseManager
-from schemas.market_data import MarketData
 from server.handlers.socket_handler import SocketHandler
 from server.market_data_processor import MarketDataProcessor
 from server.handlers.kafka_handler import KafkaHandler
@@ -96,10 +95,6 @@ class DataServer():
                 server_logger.error(f"서버 루프 오류: {e}", exc_info=True)
                 break
 
-    # @app.route('/api/missing_data', methods=['GET'])
-    # def get_missing_data(self):
-    #     return jsonify(self.dataset)
-    
     def send_data_to_db(self, current_time):
         """데이터를 DB에 저장하는 메서드"""
         new_data = [data for data in self.dataset if data['received_at'] > self.last_db_write]
@@ -188,21 +183,13 @@ class DataServer():
                         continue
                     else:
                         break
-                        
-                # 데이터 수신 성공 시 상태 업데이트
-                self.socket_handler.update_client_status(client_id, 'connected')
-                self.socket_handler.reconnect_attempts[client_id] = 0
-                
 
-                # Cap'n Proto 메시지 파싱 및 처리
-                with MarketData.MarketData.from_bytes(data) as market_data:
-                    if not self.socket_handler.validate_market_data(market_data):
-                        server_logger.warning(f"Invalid data from {client_id}")
-                        continue
-                        
-                    processed_data = self.marketdata_processor.process_data(market_data)
-                    self.dataset.append(processed_data)   # 데이터셋에 추가
-                    
+                # 데이터 처리
+                processed_data = self.marketdata_processor.process_data(data, client_id)
+                if processed_data:
+                    self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA']) # 실시간으로 Kafka에 전송
+                    self.dataset.append(processed_data)    # 데이터셋에 추가
+
             except Exception as e:
                 server_logger.error(f"Client {client_id} error: {e}")
                 if not self.socket_handler.handle_connection_failure(client_id):

@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 import json
 import os
-from server.utils.logger import server_logger
+from utils.logger import server_logger
 from server.data_processor import DataProcessor
 from server.handlers.kafka_handler import KafkaHandler
 

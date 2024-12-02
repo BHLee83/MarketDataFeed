@@ -2,8 +2,11 @@ from collections import defaultdict
 from datetime import datetime
 import time
 from concurrent.futures import ThreadPoolExecutor
-from server.utils.logger import server_logger
+from utils.logger import server_logger
 from config import Config
+
+from schemas.market_data import MarketData
+import json
 
 class MarketDataProcessor:
     def __init__(self, client_data, dataset, kafka_handler):
@@ -15,7 +18,56 @@ class MarketDataProcessor:
         self.pending_data = []
         self.kafka_handler = kafka_handler  # 주입받은 handler 사용
         
-    def process_data(self, market_data):
+    def is_capnp_data(self, data):
+        """데이터가 Cap'n Proto 형식인지 확인하는 메서드"""
+        # Cap'n Proto 데이터는 일반적으로 바이너리 형식이므로, 특정 바이트 패턴을 확인할 수 있습니다.
+        # 예를 들어, 첫 번째 바이트가 특정 값인지 확인하는 방법
+        return isinstance(data, bytes) and data.startswith(b'\x0a')  # 예시로 첫 바이트가 0x0a인지 확인
+
+    def process_data(self, data, client_id):
+        if self.is_capnp_data(data):
+            processed_data = self.process_capnp_data(data, client_id)
+        else:
+            processed_data = self.process_json_data(data, client_id)
+
+        return processed_data
+
+    def process_capnp_data(self, data, client_id):
+        """Cap'n Proto 데이터 처리"""
+        with MarketData.MarketData.from_bytes(data) as market_data:
+            if not self.socket_handler.validate_market_data(market_data):
+                server_logger.warning(f"Invalid Cap'n Proto data from {client_id}")
+                return
+
+            processed_data = self._process_data(market_data)
+
+            return processed_data
+
+    def process_json_data(self, data, client_id):
+        """JSON 데이터 처리"""
+        try:
+            current_time = time.time()
+            json_data = json.loads(data)  # JSON 문자열을 파싱
+            # JSON 데이터 처리 로직 추가
+            processed_data = {
+                'source': json_data['source'],
+                'timestamp': json_data['timestamp'],
+                'data_type': json_data['data_type'],
+                'content': [{
+                    'item_code': item['item_code'],
+                    'current_price': float(item['current_price']),
+                    'current_vol': float(item['current_vol'])
+                } for item in json_data['content']],
+                'received_at': current_time}
+
+            # # 실시간으로 Kafka에 전송
+            # self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'])
+
+            return processed_data
+        except json.JSONDecodeError as e:
+            server_logger.warning(f"Invalid JSON data from {client_id}: {e}")
+
+    def _process_data(self, market_data):
         try:
             current_time = time.time()
             processed_data = {
@@ -29,15 +81,15 @@ class MarketDataProcessor:
                 'received_at': current_time
             }
             
-            # 실시간으로 Kafka에 전송
-            self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'])
+            # # 실시간으로 Kafka에 전송
+            # self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'])
             
-            # 배치 처리를 위해 데이터 추가 (DB 저장용)
-            self.pending_data.append(processed_data)
+            # # 배치 처리를 위해 데이터 추가 (DB 저장용)
+            # self.pending_data.append(processed_data)
             
-            # 배치 크기에 도달하면 비동기 처리
-            if len(self.pending_data) >= self.batch_size:
-                self.executor.submit(self._process_batch)
+            # # 배치 크기에 도달하면 비동기 처리
+            # if len(self.pending_data) >= self.batch_size:
+            #     self.executor.submit(self._process_batch)
                 
             return processed_data
             
