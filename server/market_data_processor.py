@@ -9,13 +9,14 @@ from schemas.market_data import MarketData
 import json
 
 class MarketDataProcessor:
-    def __init__(self, client_data, dataset, kafka_handler):
+    def __init__(self, client_data, dataset, socket_handler, kafka_handler):
         self.client_data = client_data
         self.dataset = dataset
         self.index = defaultdict(list)  # defaultdict로 변경
         self.executor = ThreadPoolExecutor(max_workers=4)
         self.batch_size = 1000
         self.pending_data = []
+        self.socket_handler = socket_handler
         self.kafka_handler = kafka_handler  # 주입받은 handler 사용
         
     def is_capnp_data(self, data):
@@ -47,6 +48,8 @@ class MarketDataProcessor:
         """JSON 데이터 처리"""
         try:
             current_time = time.time()
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
             json_data = json.loads(data)  # JSON 문자열을 파싱
             # JSON 데이터 처리 로직 추가
             processed_data = {
@@ -142,6 +145,6 @@ class MarketDataProcessor:
                     'symbol': item['item_code'],
                     'timestamp': formatted_timestamp,
                     'price': item['current_price'],
-                    'volume': 0
+                    'volume': item['current_vol']
                 })
         return db_records
