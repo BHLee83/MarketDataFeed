@@ -1,5 +1,5 @@
 from typing import Dict, List, Any, Optional
-import cx_Oracle
+import oracledb
 from datetime import datetime, date
 import logging
 from contextlib import contextmanager
@@ -27,7 +27,7 @@ class DatabaseManager:
         """데이터베이스 연결을 컨텍스트 매니저로 제공"""
         try:
             if not self.conn:
-                self.conn = cx_Oracle.connect(**self.config)
+                self.conn = oracledb.connect(**self.config)
             yield self.conn
         except Exception as e:
             self.logger.error(f"Database connection error: {e}")
