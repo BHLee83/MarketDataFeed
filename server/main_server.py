@@ -43,6 +43,7 @@ class DataServer():
         self.marketdata_processor = MarketDataProcessor(
             self.client_data, 
             self.dataset,
+            self.socket_handler,
             self.kafka_handler
         )
         self.running = True
@@ -184,6 +185,10 @@ class DataServer():
                     else:
                         break
 
+                # 데이터 수신 성공 시 상태 업데이트
+                self.socket_handler.update_client_status(client_id, 'connected')
+                self.socket_handler.reconnect_attempts[client_id] = 0
+
                 # 데이터 처리
                 processed_data = self.marketdata_processor.process_data(data, client_id)
                 if processed_data:
@@ -291,3 +296,4 @@ if __name__ == "__main__":
 
     except Exception as e:
         server_logger.error(f"서버 시작 중 오류 발생: {str(e)}", exc_info=True)
+        sys.exit(1)
