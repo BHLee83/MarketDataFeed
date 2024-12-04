@@ -15,17 +15,16 @@ class ProcessingServer:
         conf = {
             'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,
             'group.id': 'market_data_processor',
-            'auto.offset.reset': 'earliest',  # latest -> earliest로 변경
-            'max.partition.fetch.bytes': 10485760,
-            'fetch.message.max.bytes': 10485760,
-            'socket.receive.buffer.bytes': 67108864,
-            'enable.auto.commit': True,
-            'auto.commit.interval.ms': 1000,  # 5000 -> 1000으로 변경
-            'session.timeout.ms': 30000,
-            'heartbeat.interval.ms': 10000,
-            'max.poll.interval.ms': 300000,  # 추가: 긴 처리 시간 허용
-            'fetch.min.bytes': 1,  # 추가: 즉시 데이터 가져오기
-            'fetch.wait.max.ms': 500  # 추가: 최대 대기 시간 제한
+            'auto.offset.reset': 'earliest',  # 데이터 손실 방지를 위해 earliest 유지
+            'max.partition.fetch.bytes': 10485760,  # 파티션별 최대 가져오기 크기 유지
+            'socket.receive.buffer.bytes': 67108864,  # 소켓 버퍼 크기 유지
+            'enable.auto.commit': True,  # 자동 커밋 유지
+            'auto.commit.interval.ms': 1000,  # 커밋 간격을 유지, 더 낮출 수도 있음
+            'session.timeout.ms': 30000,  # 연결 안정성을 위해 기본값 유지
+            'heartbeat.interval.ms': 10000,  # 세션 타임아웃의 1/3로 유지
+            'max.poll.interval.ms': 300000,  # 긴 처리 작업 허용
+            'fetch.min.bytes': 1,  # 즉시 가져오기를 유지
+            'fetch.wait.max.ms': 500,  # 낮은 대기 시간으로 빠른 가져오기
         }
         self.consumer = Consumer(conf)
         self.consumer.subscribe([Config.KAFKA_TOPICS['RAW_MARKET_DATA']])

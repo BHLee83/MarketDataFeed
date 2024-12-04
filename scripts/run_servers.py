@@ -23,7 +23,7 @@ processing_server = None
 def check_kafka_connection():
     """Kafka 연결 상태 확인"""
     try:
-        conf = {'bootstrap.servers': 'localhost:9092'}
+        conf = {'bootstrap.servers': '132.226.168.121:9092'}
         admin_client = AdminClient(conf)
         metadata = admin_client.list_topics(timeout=5)
         logger.info(f"Kafka 연결 성공 - 사용 가능한 토픽: {metadata.topics}")

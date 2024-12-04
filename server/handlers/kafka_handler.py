@@ -14,11 +14,15 @@ class KafkaHandler:
         """Kafka Producer 생성"""
         conf = {
             'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,
-            'queue.buffering.max.messages': 1000000,
-            'queue.buffering.max.kbytes': 1048576,
-            'batch.num.messages': 1000,
-            'linger.ms': 5,
-            'compression.type': 'lz4'
+            'queue.buffering.max.messages': 1000000,  # 충분한 버퍼 크기 유지
+            'queue.buffering.max.kbytes': 1048576,  # 대역폭 제한 고려
+            'batch.num.messages': 1000,  # 배치 크기 유지
+            'linger.ms': 1,  # 낮은 지연 시간 유지
+            'compression.type': 'lz4',  # 효율적 압축 유지
+            'acks': 'all',  # 추가: 메시지 안정성 보장
+            'retries': 5,  # 추가: 메시지 재전송 횟수 제한
+            'retry.backoff.ms': 100,  # 추가: 재시도 대기 시간
+            'delivery.timeout.ms': 120000,  # 추가: 메시지 전송 타임아웃
         }
         return Producer(conf)
         
@@ -63,11 +67,11 @@ class KafkaHandler:
             admin_client = AdminClient({'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS})
             topic_list = [NewTopic(
                 topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
-                num_partitions=3,
+                num_partitions=6,
                 replication_factor=1
             ), NewTopic(
                 topic=Config.KAFKA_TOPICS['PROCESSED_DATA'],
-                num_partitions=3,
+                num_partitions=6,
                 replication_factor=1
             )]
             

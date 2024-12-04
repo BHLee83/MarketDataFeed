@@ -6,7 +6,7 @@ import time
 import psutil
 import json
 from datetime import datetime
-from server.utils.logger import monitoring_logger
+from utils.logger import monitoring_logger
 from server.monitoring.alert_manager import AlertManager
 from collections import defaultdict
 from server.monitoring.metrics_exporter import MetricsExporter
@@ -16,17 +16,16 @@ class SystemMonitor:
         self.consumer_conf = {
             'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,
             'group.id': 'market_data_monitor',
-            'auto.offset.reset': 'earliest',
-            'enable.auto.commit': True,
-            'auto.commit.interval.ms': 1000,
-            'max.partition.fetch.bytes': 10485760,
-            'fetch.message.max.bytes': 10485760,
-            'socket.receive.buffer.bytes': 67108864,
-            'session.timeout.ms': 30000,
-            'heartbeat.interval.ms': 10000,
-            'max.poll.interval.ms': 300000,
-            'fetch.min.bytes': 1,
-            'fetch.wait.max.ms': 500
+            'auto.offset.reset': 'earliest',  # 데이터 손실 방지를 위해 earliest 유지
+            'max.partition.fetch.bytes': 10485760,  # 파티션별 최대 가져오기 크기 유지
+            'socket.receive.buffer.bytes': 67108864,  # 소켓 버퍼 크기 유지
+            'enable.auto.commit': True,  # 자동 커밋 유지
+            'auto.commit.interval.ms': 1000,  # 커밋 간격을 유지, 더 낮출 수도 있음
+            'session.timeout.ms': 30000,  # 연결 안정성을 위해 기본값 유지
+            'heartbeat.interval.ms': 10000,  # 세션 타임아웃의 1/3로 유지
+            'max.poll.interval.ms': 300000,  # 긴 처리 작업 허용
+            'fetch.min.bytes': 1,  # 즉시 가져오기를 유지
+            'fetch.wait.max.ms': 500,  # 낮은 대기 시간으로 빠른 가져오기
         }
         
         self.admin_client = AdminClient({'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS})
@@ -61,7 +60,7 @@ class SystemMonitor:
     def _consume_messages(self):
         """메시지 소비 공통 로직"""
         try:
-            messages = self.consumer.consume(num_messages=100, timeout=1.0)
+            messages = self.consumer.consume(num_messages=2000, timeout=0.1)
             monitoring_logger.info(f"소비된 메시지 수: {len(messages)}")
             self.last_consumed_messages = messages  # 메시지 캐시 업데이트
             return messages
