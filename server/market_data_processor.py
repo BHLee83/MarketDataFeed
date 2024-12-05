@@ -23,7 +23,7 @@ class MarketDataProcessor:
         """데이터가 Cap'n Proto 형식인지 확인하는 메서드"""
         # Cap'n Proto 데이터는 일반적으로 바이너리 형식이므로, 특정 바이트 패턴을 확인할 수 있습니다.
         # 예를 들어, 첫 번째 바이트가 특정 값인지 확인하는 방법
-        return isinstance(data, bytes) and data.startswith(b'\x0a')  # 예시로 첫 바이트가 0x0a인지 확인
+        return isinstance(data, bytes) and data.startswith(b'\x00')  # 예시로 첫 바이트가 0x00인지 확인
 
     def process_data(self, data, client_id):
         if self.is_capnp_data(data):
