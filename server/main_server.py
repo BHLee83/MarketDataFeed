@@ -33,7 +33,7 @@ class DataServer():
         self.kafka_handler = KafkaHandler()
         self.running = True
         self.monitor = monitor
-        self.data_processor = DataProcessor(self.db_manager)
+        self.data_processor = DataProcessor(self.db_manager, self.socket_handler)
         
         # 데이터 처리 스레드 시작
         self.processor_thread = threading.Thread(target=self.data_processor.check_idle_time, daemon=True)

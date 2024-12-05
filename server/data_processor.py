@@ -8,10 +8,11 @@ from utils.logger import server_logger
 from schemas.market_data import MarketData
 
 class DataProcessor:
-    def __init__(self, db_manager):
+    def __init__(self, db_manager, socket_handler):
         self.db_manager = db_manager
-        self.dataset = []
+        self.socket_handler = socket_handler
         self.last_db_write = time.time()
+        self.dataset = []
         self.running = True
         
     def check_idle_time(self):
