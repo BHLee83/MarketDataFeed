@@ -2,7 +2,7 @@ from confluent_kafka import Producer, KafkaError
 from config import Config
 import json
 import time
-import logging
+from utils.logger import kafka_logger
 from confluent_kafka.admin import AdminClient, NewTopic
 from typing import Dict, Any, List
 import threading
@@ -10,11 +10,6 @@ import queue
 
 class KafkaHandler:
     def __init__(self, max_retries=10, retry_backoff_base=0.5):
-        # 로깅 설정
-        logging.basicConfig(level=logging.INFO, 
-                            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        self.logger = logging.getLogger(__name__)
-
         # 메시지 재시도 관련 설정
         self.max_retries = max_retries
         self.retry_backoff_base = retry_backoff_base
@@ -48,32 +43,6 @@ class KafkaHandler:
         
     def send_data(self, data: Dict[str, Any], topic: str):
         """데이터를 Kafka로 전송"""
-        # try:
-        #     # JSON 직렬화
-        #     message = json.dumps(data)
-            
-        #     # Kafka로 전송
-        #     self.producer.produce(
-        #         topic,
-        #         value=message.encode('utf-8'),
-        #         callback=self._delivery_report
-        #     )
-        #     # 콜백이 실행될 수 있도록 충분한 시간 제공
-        #     self.producer.poll(1.0)  # 1초 대기
-            
-        # except BufferError:
-        #     # 버퍼가 가득 찼을 때 flush 수행
-        #     self.producer.flush()
-        #     # 재시도
-        #     self.producer.produce(
-        #         topic,
-        #         value=message.encode('utf-8'),
-        #         callback=self._delivery_report
-        #     )
-        # except Exception as e:
-        #     print(f"Kafka 전송 실패: {e}")
-        #     self.temp_storage.append(data)
-        
         try:
             # JSON 직렬화
             message = json.dumps(data).encode('utf-8')
@@ -82,7 +51,7 @@ class KafkaHandler:
             self.message_queue.put((topic, message, 0))
             
         except Exception as e:
-            self.logger.error(f"메시지 큐 추가 실패: {e}")
+            kafka_logger.error(f"메시지 큐 추가 실패: {e}")
             
     def _message_sender_thread(self):
         """백그라운드 메시지 전송 스레드"""
@@ -105,10 +74,10 @@ class KafkaHandler:
                     if retry_count < self.max_retries:
                         self.message_queue.put((topic, message, retry_count + 1))
                     else:
-                        self.logger.error(f"최대 재시도 횟수 초과: {topic}")
+                        kafka_logger.error(f"최대 재시도 횟수 초과: {topic}")
                 
             except Exception as e:
-                self.logger.error(f"메시지 전송 스레드 오류: {e}")
+                kafka_logger.error(f"메시지 전송 스레드 오류: {e}")
                 time.sleep(1)
             
     def _start_message_sender(self):
@@ -119,21 +88,27 @@ class KafkaHandler:
     def _delivery_report(self, err, msg):
         """메시지 전송 결과 콜백"""
         if err is not None:
-            print(f'메시지 전송 실패: {err}')
+            kafka_logger.error(f'메시지 전송 실패: {err}')
         # else:
         #     print(f'메시지 전송 성공: {msg.topic()} [{msg.partition()}] at offset {msg.offset()}')
         
     def _create_topics(self):
-        """필요한 Kafka 토픽 생성"""
+        """동적 토픽 생성 및 관리"""
         try:
             admin_client = AdminClient({'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS})
+
+            # 동적 파티션 수 계산 (시스템 리소스 고려)
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            partition_count = max(cpu_count * 2, 3)  # 최소 3개, CPU 코어 수의 2배
+
             topic_list = [NewTopic(
                 topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
-                num_partitions=6,
+                num_partitions=partition_count,
                 replication_factor=1
             ), NewTopic(
                 topic=Config.KAFKA_TOPICS['PROCESSED_DATA'],
-                num_partitions=6,
+                num_partitions=partition_count,
                 replication_factor=1
             )]
             
@@ -141,13 +116,13 @@ class KafkaHandler:
             for topic, f in fs.items():
                 try:
                     f.result()  # 토픽 생성 완료 대기
-                    print(f"토픽 생성 완료: {topic}")
+                    kafka_logger.info(f"토픽 생성 완료: {topic}")
                 except Exception as e:
                     if "already exists" not in str(e):
                         raise e
                 
         except Exception as e:
-            print(f"토픽 생성 실패: {e}")
+            kafka_logger.error(f"토픽 생성 실패: {e}")
 
     def close(self):
         """안전한 종료 메서드"""
