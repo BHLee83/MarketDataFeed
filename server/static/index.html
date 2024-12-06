@@ -3,50 +3,97 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>표 데이터 예제</title>
+    <title>시장 데이터 모니터링</title>
+    <style>
+        .data-container { margin: 20px; }
+        .chart-container { height: 400px; }
+    </style>
 </head>
 <body>
-    <h1>데이터 표</h1>
-    <table id="dataTable" border="1">
-        <thead>
-            <tr>
-                <th>월</th>
-                <th>값</th>
-            </tr>
-        </thead>
-        <tbody>
-            <!-- 데이터가 여기에 추가됩니다 -->
-        </tbody>
-    </table>
+    <div class="data-container">
+        <h2>실시간 체결 데이터</h2>
+        <table id="tickTable" border="1">
+            <thead>
+                <tr>
+                    <th>소스</th>
+                    <th>시간</th>
+                    <th>종목코드</th>
+                    <th>가격</th>
+                    <th>거래량</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="data-container">
+        <h2>분봉 데이터</h2>
+        <div id="minuteChart" class="chart-container"></div>
+    </div>
+
+    <div class="data-container">
+        <h2>거래량 프로파일</h2>
+        <div id="volumeProfile" class="chart-container"></div>
+    </div>
 
     <script>
-        async function fetchTableData() {
-            const response = await fetch('/api/processed-data');
-            if (!response.ok) {
-                throw new Error('네트워크 응답이 좋지 않습니다.');
+        let ws = new WebSocket(`ws://${window.location.host}/ws/market-data`);
+        
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            switch(data.type) {
+                case 'tick_data':
+                    updateTickTable(data.data);
+                    break;
+                case 'minute_data':
+                    updateMinuteChart(data.data);
+                    break;
+                case 'statistics_data':
+                    updateStatistics(data.data);
+                    break;
+                case 'chart_data':
+                    updateCharts(data.data);
+                    break;
             }
-            const data = await response.json();
-            return data;
+        };
+
+        function updateTickTable(tickData) {
+            const table = document.getElementById('tickTable').getElementsByTagName('tbody')[0];
+            // 최근 100개 데이터만 유지
+            while (table.rows.length >= 100) {
+                table.deleteRow(table.rows.length - 1);
+            }
+            
+            tickData.forEach(tick => {
+                const row = table.insertRow(0);
+                row.insertCell(0).textContent = tick.source;
+                row.insertCell(1).textContent = new Date(tick.timestamp).toLocaleTimeString();
+                row.insertCell(2).textContent = tick.item_code;
+                row.insertCell(3).textContent = tick.current_price.toLocaleString();
+                row.insertCell(4).textContent = tick.current_vol.toLocaleString();
+            });
         }
 
-        async function renderTable() {
-            try {
-                const tableData = await fetchTableData();
-                const tableBody = document.getElementById('dataTable').getElementsByTagName('tbody')[0];
-
-                tableData.labels.forEach((label, index) => {
-                    const row = tableBody.insertRow();
-                    const cell1 = row.insertCell(0);
-                    const cell2 = row.insertCell(1);
-                    cell1.textContent = label;
-                    cell2.textContent = tableData.values[index];
-                });
-            } catch (error) {
-                console.error('데이터를 가져오는 중 오류 발생:', error);
-            }
+        function updateMinuteChart(minuteData) {
+            // Chart.js나 다른 차트 라이브러리를 사용하여 분봉 차트 업데이트
         }
 
-        renderTable();
+        function updateStatistics(statsData) {
+            // 통계 데이터 업데이트 (거래량 프로파일, 가격대별 거래량 등)
+        }
+
+        function updateCharts(chartData) {
+            // 차트 데이터 업데이트
+        }
+
+        // 연결 끊김 처리 및 재연결
+        ws.onclose = function() {
+            console.log('웹소켓 연결이 끊어졌습니다. 재연결을 시도합니다...');
+            setTimeout(function() {
+                ws = new WebSocket(`ws://${window.location.host}/ws/market-data`);
+            }, 1000);
+        };
     </script>
 </body>
 </html>
