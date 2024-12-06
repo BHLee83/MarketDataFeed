@@ -8,6 +8,7 @@ import signal
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 from database.db_manager import DatabaseManager
+from server.processing_server import ProcessingServer
 from server.handlers.socket_handler import SocketHandler
 from server.handlers.kafka_handler import KafkaHandler
 from server.monitoring.system_monitor import SystemMonitor
@@ -103,7 +104,7 @@ class DataServer():
                 processed_data = self.data_processor.process_data(data, client_id)
                 if processed_data:
                     self.data_processor.dataset.append(processed_data)  # 데이터셋에 추가
-                    self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA']) # 실시간으로 Kafka에 전송
+                    self.kafka_handler.send_data(topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'], data=processed_data) # 실시간으로 Kafka에 전송
 
             except Exception as e:
                 server_logger.error(f"Client {client_id} error: {e}")
@@ -143,6 +144,11 @@ def start_data_server(system_monitor):
     data_server = DataServer(monitor=system_monitor)
     data_server.start()
 
+def start_processing_server():
+    """처리 서버 시작"""
+    processing_server = ProcessingServer()
+    processing_server.start()
+
 if __name__ == "__main__":
     """서버 시작"""
     data_server = None
@@ -169,11 +175,14 @@ if __name__ == "__main__":
         # 서버를 스레드로 시작
         server_logger.info("데이터 서버와 처리 서버를 시작합니다...")
         data_server_thread = threading.Thread(target=start_data_server, args=(system_monitor,))
+        processing_server_thread = threading.Thread(target=start_processing_server)
 
         data_server_thread.start()
+        processing_server_thread.start()
 
         # 메인 스레드에서 스레드가 종료될 때까지 대기
         data_server_thread.join()
+        processing_server_thread.join()
         
     except KeyboardInterrupt:
         signal_handler(signal.SIGINT, None)

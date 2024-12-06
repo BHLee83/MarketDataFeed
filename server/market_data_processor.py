@@ -1,150 +1,216 @@
-from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
-from concurrent.futures import ThreadPoolExecutor
-from utils.logger import server_logger
-from config import Config
-
-from schemas.market_data import MarketData
 import json
+import threading
+from config import Config
+from utils.logger import server_logger
 
 class MarketDataProcessor:
-    def __init__(self, client_data, dataset, socket_handler, kafka_handler):
-        self.client_data = client_data
-        self.dataset = dataset
-        self.index = defaultdict(list)  # defaultdict로 변경
-        self.executor = ThreadPoolExecutor(max_workers=4)
-        self.batch_size = 1000
-        self.pending_data = []
-        self.socket_handler = socket_handler
-        self.kafka_handler = kafka_handler  # 주입받은 handler 사용
+    def __init__(self, db_manager, kafka_handler, consumer):
+        self.db_manager = db_manager
+        self.kafka_handler = kafka_handler
+        self.consumer = consumer
+        self.running = True
+        self.topic = Config.KAFKA_TOPICS['PROCESSED_DATA']
         
-    def is_capnp_data(self, data):
-        """데이터가 Cap'n Proto 형식인지 확인하는 메서드"""
-        # Cap'n Proto 데이터는 일반적으로 바이너리 형식이므로, 특정 바이트 패턴을 확인할 수 있습니다.
-        # 예를 들어, 첫 번째 바이트가 특정 값인지 확인하는 방법
-        return isinstance(data, bytes) and data.startswith(b'\x00')  # 예시로 첫 바이트가 0x00인지 확인
+        # 캐시 데이터 크기 제한
+        self.MAX_CHUNK_SIZE = 100  # 한 번에 보낼 수 있는 최대 데이터 수
 
-    def process_data(self, data, client_id):
-        if self.is_capnp_data(data):
-            processed_data = self.process_capnp_data(data, client_id)
-        else:
-            processed_data = self.process_json_data(data, client_id)
+        # 시계열 데이터 처리를 위한 캐시
+        self.time_series_cache = {
+            'tick': [],    # 체결 데이터
+            'minute': {},  # 분봉 데이터
+            'daily': {}    # 일봉 데이터
+        }
+        
+        # 통계 데이터 캐시
+        self.statistics_cache = {
+            'volume_profile': {},  # 거래량 프로파일
+            'price_levels': {},    # 가격대별 거래량
+            'moving_averages': {}  # 이동평균
+        }
+        
+        # 차트 데이터 캐시
+        self.chart_cache = {}
+        
+        # 처리 스레드 시작
+        self.start_processing_threads()
+        
+    def start_processing_threads(self):
+        """데이터 처리 스레드 시작"""
+        self.threads = {
+            'time_series': threading.Thread(target=self.process_time_series, daemon=True),
+            'statistics': threading.Thread(target=self.process_statistics, daemon=True),
+            'chart_data': threading.Thread(target=self.process_chart_data, daemon=True),
+            'publish_processed_data': threading.Thread(target=self.publish_processed_data, daemon=True)
+        }
+        
+        for thread in self.threads.values():
+            thread.start()
 
-        return processed_data
+    def stop(self):
+        """데이터 처리 스레드 종료"""
+        server_logger.info("\n서버를 종료합니다...")
+        
+        self.running = False
+        for thread in self.threads.values():
+            thread.join()
 
-    def process_capnp_data(self, data, client_id):
-        """Cap'n Proto 데이터 처리"""
-        with MarketData.MarketData.from_bytes(data) as market_data:
-            if not self.socket_handler.validate_market_data(market_data):
-                server_logger.warning(f"Invalid Cap'n Proto data from {client_id}")
-                return
-
-            processed_data = self._process_data(market_data)
-
-            return processed_data
-
-    def process_json_data(self, data, client_id):
-        """JSON 데이터 처리"""
-        try:
-            current_time = time.time()
-            if isinstance(data, bytes):
-                data = data.decode('utf-8')
-            json_data = json.loads(data)  # JSON 문자열을 파싱
-            # JSON 데이터 처리 로직 추가
-            processed_data = {
-                'source': json_data['source'],
-                'timestamp': json_data['timestamp'],
-                'data_type': json_data['data_type'],
-                'content': [{
-                    'item_code': item['item_code'],
-                    'current_price': float(item['current_price']),
-                    'current_vol': float(item['current_vol'])
-                } for item in json_data['content']],
-                'received_at': current_time}
-
-            # # 실시간으로 Kafka에 전송
-            # self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'])
-
-            return processed_data
-        except json.JSONDecodeError as e:
-            server_logger.warning(f"Invalid JSON data from {client_id}: {e}")
-
-    def _process_data(self, market_data):
-        try:
-            current_time = time.time()
-            processed_data = {
-                'source': str(market_data.source),
-                'timestamp': str(market_data.timestamp),
-                'data_type': str(market_data.dataType),
-                'content': [{
-                    'item_code': str(item.itemCode),
-                    'current_price': float(item.currentPrice)
-                } for item in market_data.content],
-                'received_at': current_time
-            }
-            
-            # # 실시간으로 Kafka에 전송
-            # self.kafka_handler.send_data(processed_data, topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA'])
-            
-            # # 배치 처리를 위해 데이터 추가 (DB 저장용)
-            # self.pending_data.append(processed_data)
-            
-            # # 배치 크기에 도달하면 비동기 처리
-            # if len(self.pending_data) >= self.batch_size:
-            #     self.executor.submit(self._process_batch)
-                
-            return processed_data
-            
-        except Exception as e:
-            server_logger.error("데이터 처리 오류: %s", e, exc_info=True)
-            return None
-            
-    def _process_batch(self):
-        """배치 데이터 처리"""
-        try:
-            batch = self.pending_data
-            self.pending_data = []
-            
-            # 소스별 데이터 그룹화
-            source_groups = defaultdict(list)
-            for data in batch:
-                source_groups[data['source']].append(data)
-                
-            # 소스별로 한 번에 처리
-            for source, data_list in source_groups.items():
-                if source not in self.client_data:
-                    self.client_data[source] = []
-                self.client_data[source].extend(data_list)
-                
-            # 통합 데이터셋에 추가
-            self.dataset.extend(batch)
-            
-            # 인덱스 일괄 업데이트
-            for data in batch:
-                for item in data['content']:
-                    self.index[item['item_code']].append(data)
+    def process_time_series(self):
+        """시계열 데이터 처리"""
+        while self.running:
+            try:
+                messages = self.consumer.consume(num_messages=100, timeout=1.0)
+                for msg in messages:
+                    if msg.error():
+                        continue
+                        
+                    market_data = json.loads(msg.value().decode('utf-8'))
+                    self.update_time_series(market_data)
                     
-        except Exception as e:
-            server_logger.error("배치 처리 오류: %s", e, exc_info=True)
+                # 주기적으로 캐시 데이터를 DB에 저장
+                self.store_time_series_data()
+                    
+            except Exception as e:
+                print(f"시계열 데이터 처리 오류: {e}")
+                time.sleep(1)
+                
+    def process_statistics(self):
+        """통계 데이터 처리"""
+        while self.running:
+            try:
+                self.calculate_volume_profile()
+                self.calculate_price_levels()
+                self.calculate_moving_averages()
+                time.sleep(1)  # 1초마다 통계 업데이트
+                
+            except Exception as e:
+                print(f"통계 데이터 처리 오류: {e}")
+                time.sleep(1)
+                
+    def process_chart_data(self):
+        """차트 데이터 생성"""
+        while self.running:
+            try:
+                self.generate_chart_data()
+                time.sleep(0.5)  # 0.5초마다 차트 데이터 업데이트
+                
+            except Exception as e:
+                print(f"차트 데이터 처리 오류: {e}")
+                time.sleep(1)
+                
+    def _chunk_data(self, data):
+        """대용량 데이터를 작은 청크로 분할"""
+        for i in range(0, len(data), self.MAX_CHUNK_SIZE):
+            yield data[i:i + self.MAX_CHUNK_SIZE]
 
-    def search_by_item_code(self, item_code):
-        """인덱스를 사용하여 특정 item_code로 데이터를 검색"""
-        return self.index.get(item_code, [])
+    def publish_processed_data(self):
+        """처리된 데이터를 Kafka의 processed-data 토픽에 발행"""
+        while self.running:
+            try:
+                # 시계열 데이터 발행 (청크 단위)
+                if self.time_series_cache['tick']:
+                    for tick_chunk in self._chunk_data(self.time_series_cache['tick']):
+                        processed_tick_data = {
+                            'type': 'tick_data',
+                            'data': tick_chunk
+                        }
+                        self.kafka_handler.send_data(
+                            topic=self.topic, 
+                            data=processed_tick_data
+                        )
+                    # 발행 후 캐시 초기화
+                    self.time_series_cache['tick'] = []
 
-    def prepare_db_data(self, new_data):
-        """DB 저장을 위한 데이터 형식 변환"""
-        db_records = []
-        for data in new_data:
-            # ISO 형식의 timestamp를 파싱 (예: 2024-11-13T17:13:34.622521)
-            dt = datetime.fromisoformat(data['timestamp'])
-            formatted_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-            
-            for item in data['content']:
-                db_records.append({
-                    'symbol': item['item_code'],
-                    'timestamp': formatted_timestamp,
-                    'price': item['current_price'],
-                    'volume': item['current_vol']
-                })
-        return db_records
+                # 분봉 데이터 발행 (청크 단위)
+                for minute_key, minute_data in list(self.time_series_cache['minute'].items()):
+                    for minute_chunk in self._chunk_data(minute_data):
+                        processed_minute_data = {
+                            'type': 'minute_data',
+                            'key': minute_key,
+                            'data': minute_chunk
+                        }
+                        self.kafka_handler.send_data(
+                            topic=self.topic, 
+                            data=processed_minute_data
+                        )
+                    # 발행 후 해당 분봉 데이터 삭제
+                    del self.time_series_cache['minute'][minute_key]
+
+                # 통계 데이터 발행 (청크 단위)
+                if self.statistics_cache:
+                    processed_stats_data = {
+                        'type': 'statistics_data',
+                        'data': self.statistics_cache
+                    }
+                    self.kafka_handler.send_data(
+                        topic=self.topic, 
+                        data=processed_stats_data
+                    )
+
+                # 차트 데이터 발행 (필요시 청크 처리)
+                if self.chart_cache:
+                    processed_chart_data = {
+                        'type': 'chart_data',
+                        'data': self.chart_cache
+                    }
+                    self.kafka_handler.send_data(
+                        topic=self.topic, 
+                        data=processed_chart_data
+                    )
+
+                # 일정 간격으로 발행
+                time.sleep(5)  # 5초마다 처리된 데이터 발행
+
+            except Exception as e:
+                server_logger.error(f"처리된 데이터 발행 오류: {e}")
+                time.sleep(1)
+
+    def update_time_series(self, market_data):
+        """시계열 데이터 업데이트"""
+        timestamp = datetime.fromisoformat(market_data['timestamp'])
+        
+        # 체결 데이터 업데이트
+        self.time_series_cache['tick'].append(market_data)
+        
+        # 분봉 데이터 업데이트
+        minute_key = timestamp.strftime('%Y%m%d%H%M')
+        if minute_key not in self.time_series_cache['minute']:
+            self.time_series_cache['minute'][minute_key] = []
+        self.time_series_cache['minute'][minute_key].append(market_data)
+        
+        # 일봉 데이터 업데이트
+        daily_key = timestamp.strftime('%Y%m%d')
+        if daily_key not in self.time_series_cache['daily']:
+            self.time_series_cache['daily'][daily_key] = []
+        self.time_series_cache['daily'][daily_key].append(market_data)
+        
+    def store_time_series_data(self):
+        """시계열 데이터 DB 저장"""
+        current_time = datetime.now()
+        
+        # 전일 데이터 저장 (새벽 5시)
+        if current_time.hour == 5 and current_time.minute == 0:
+            previous_day = (current_time - timedelta(days=1)).strftime('%Y%m%d')
+            if previous_day in self.time_series_cache['daily']:
+                self.db_manager.store_daily_data(
+                    self.time_series_cache['daily'][previous_day]
+                )
+                del self.time_series_cache['daily'][previous_day]
+
+    # 아직 구현되지 않은 메서드들 (플레이스홀더)
+    def calculate_volume_profile(self):
+        """거래량 프로파일 계산"""
+        pass
+    
+    def calculate_price_levels(self):
+        """가격대별 거래량 계산"""
+        pass
+    
+    def calculate_moving_averages(self):
+        """이동평균 계산"""
+        pass
+    
+    def generate_chart_data(self):
+        """차트 데이터 생성"""
+        pass

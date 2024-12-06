@@ -41,12 +41,20 @@ class KafkaHandler:
         }
         return Producer(conf)
         
-    def send_data(self, data: Dict[str, Any], topic: str):
+    def send_data(self, topic: str, data: Dict[str, Any]):
         """데이터를 Kafka로 전송"""
         try:
-            # JSON 직렬화
-            message = json.dumps(data).encode('utf-8')
-            
+            # JSON 직렬화 및 크기 제한 확인
+            try:
+                message = json.dumps(data).encode('utf-8')
+            except Exception as e:
+                kafka_logger.error(f"JSON 직렬화 실패: {e}")
+                return
+
+            # 메시지 크기 로깅 (디버깅용)
+            if len(message) > 10 * 1024 * 1024:  # 10MB 초과 시 경고
+                kafka_logger.warning(f"대용량 메시지 감지: {len(message)} bytes")
+
             # 메시지 큐에 추가 (백그라운드 스레드에서 처리)
             self.message_queue.put((topic, message, 0))
             
