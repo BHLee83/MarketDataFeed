@@ -19,6 +19,7 @@ from utils.logger import server_logger
 class DataServer():
     def __init__(self, host=Config.HOST, port=Config.PORT, monitor=None):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.settimeout(1.0)  # accept()에 대한 타임아웃만 설정
         self.host = host
         self.port = port
