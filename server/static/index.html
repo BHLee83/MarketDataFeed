@@ -37,26 +37,48 @@
     </div>
 
     <script>
-        let ws = new WebSocket(`ws://${window.location.host}/ws/market-data`);
+        // WebSocket 연결 및 재연결 관리
+        let ws = null;
         
-        ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws/market-data`);
             
-            switch(data.type) {
-                case 'tick_data':
-                    updateTickTable(data.data);
-                    break;
-                case 'minute_data':
-                    updateMinuteChart(data.data);
-                    break;
-                case 'statistics_data':
-                    updateStatistics(data.data);
-                    break;
-                case 'chart_data':
-                    updateCharts(data.data);
-                    break;
-            }
-        };
+            ws.onopen = function() {
+                console.log('WebSocket 연결됨');
+            };
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                
+                switch(data.type) {
+                    case 'tick_data':
+                        updateTickTable(data.data);
+                        break;
+                    case 'minute_data':
+                        updateMinuteChart(data.data);
+                        break;
+                    case 'statistics_data':
+                        updateStatistics(data.data);
+                        break;
+                    case 'chart_data':
+                        updateCharts(data.data);
+                        break;
+                }
+            };
+            
+            ws.onclose = function() {
+                console.log('WebSocket 연결이 끊어졌습니다. 재연결을 시도합니다...');
+                setTimeout(connectWebSocket, 1000);
+            };
+            
+            ws.onerror = function(err) {
+                console.error('WebSocket 오류:', err);
+                ws.close();
+            };
+        }
+        
+        // 초기 연결 시작
+        connectWebSocket();
 
         function updateTickTable(tickData) {
             const table = document.getElementById('tickTable').getElementsByTagName('tbody')[0];
@@ -86,14 +108,6 @@
         function updateCharts(chartData) {
             // 차트 데이터 업데이트
         }
-
-        // 연결 끊김 처리 및 재연결
-        ws.onclose = function() {
-            console.log('웹소켓 연결이 끊어졌습니다. 재연결을 시도합니다...');
-            setTimeout(function() {
-                ws = new WebSocket(`ws://${window.location.host}/ws/market-data`);
-            }, 1000);
-        };
     </script>
 </body>
 </html>
