@@ -34,7 +34,7 @@ class SHiIndiClient(QMainWindow):
 
     def initialize_indi(self):
         self.setWindowTitle("Market Data client")
-        self.mst_names = ['fut_mst', 'cfut_mst', 'fri_mst', 'gmf_mst']  # KOSPI 선물, 옵션, 상품선물, 유렉스, 해외지수, 야간달러선물 종목코드 조회
+        self.mst_names = ['FRF_MST']
 
         try:
             print("indi 초기화 시작")
@@ -49,7 +49,7 @@ class SHiIndiClient(QMainWindow):
             else:
                 print("indi 실행 실패!")
                 return False
-            
+
             self.getCodeList()  # 종목코드 리스트 수신
             if self.mst_ready:
                 print(f"종목코드 리스트 수신 성공: {self.code_list}")
@@ -63,7 +63,7 @@ class SHiIndiClient(QMainWindow):
         except Exception as e:
             print(f"indi 초기화 중 오류 발생: {e}")
             return False
-        
+    
     def handle_timeout(self):
         # 타이머가 초과한 경우 처리
         print("Indi 로그인 시도 타임아웃!")
@@ -96,50 +96,21 @@ class SHiIndiClient(QMainWindow):
             if cnt > 0:
                 for i in range(cnt):
                     dictMst = {}
-                    if name == 'fut_mst':
-                        shortCode = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
-                        if shortCode.startswith('10'):  # 1: 선물 / 01: 코스피200, 04: 변동성, 05: 미니선물, 06: 코스닥, 07: 유로스톡스50, 08: KRX300
-                            dictMst['구분']= name
-                            dictMst['단축코드'] = shortCode
-                            dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)
-                    elif name == 'cfut_mst':
-                        dictMst['구분']= name
-                        dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
-                        dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)
-                    elif name == 'fri_mst':
-                        dictMst['구분']= name
-                        dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)   # 심벌
-                        dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)
-                    else:
-                        dictMst['구분']= name
-                        dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
-                        dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)
+                    dictMst['종목코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)
+                    dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
                     self.code_list.append(dictMst)
-
-            if name == self.mst_names[-1]:
-                dictMst = {'구분': 'c_mst', '단축코드': 'USD00', '종목명': 'USDKRW'}
-                self.code_list.append(dictMst)
-                self.mst_ready = True
+                
+            self.mst_ready = True
 
         self.code_list = [item for item in self.code_list if item]  # self.code_list 에서 값이 비어있는 건 제거
         self.event_loop.exit()
 
     def ReceiveRTData(self, RealType):
-        if any([RealType == 'FC', RealType == 'MC']):
-            item_code = self.IndiReal.dynamicCall("GetSingleData(int)", 1)    # 단축코드
-            trade_time = self.IndiReal.dynamicCall("GetSingleData(int)", 2)    # 체결시간
-            current_price = self.IndiReal.dynamicCall("GetSingleData(int)", 4)  # 현재가
-            current_vol = self.IndiReal.dynamicCall("GetSingleData(int)", 10)  # 단위체결량
-        elif any([RealType == 'IC', RealType == 'MX']):
-            if RealType == 'IC':
-                trade_time = self.IndiReal.dynamicCall("GetSingleData(int)", 1)    # 체결시간
-            elif RealType == 'MX':
-                trade_time = self.IndiReal.dynamicCall("GetSingleData(int)", 2)    # 체결시간
-            item_code = self.IndiReal.dynamicCall("GetSingleData(int)", 0)    # 단축코드 or 업종코드
-            current_price = self.IndiReal.dynamicCall("GetSingleData(int)", 3)  # 현재가
-            current_vol = self.IndiReal.dynamicCall("GetSingleData(int)", 9)  # 단위체결량
-        elif RealType == 'OC':
-            print("데이터 수신됨. 작업 필요")
+        if RealType == 'fc':
+            item_code = self.IndiReal.dynamicCall("GetSingleData(int)", 0)    # 종목코드
+            trade_time = self.IndiReal.dynamicCall("GetSingleData(int)", 3)    # 체결시간
+            current_price = self.IndiReal.dynamicCall("GetSingleData(int)", 6)  # 현재가
+            current_vol = self.IndiReal.dynamicCall("GetSingleData(int)", 10)  # 체결수량
 
         data = [{'item_code': item_code, 'trade_time': trade_time, 'current_price': current_price, 'current_vol': current_vol}]
         print(f"수신데이터: {data}")
@@ -149,21 +120,7 @@ class SHiIndiClient(QMainWindow):
 
     def request_RT_data(self):
         for code in self.code_list:
-            if code['구분'] == 'fut_mst':
-                tr = 'FC'
-            elif code['구분'] == 'cfut_mst':
-                tr = 'MC'
-            elif code['구분'] == 'fri_mst':
-                tr = 'MX'
-            elif code['구분'] == 'gmf_mst':
-                tr = 'OC'
-            self.IndiReal.dynamicCall("RequestRTReg(QString, QString)", tr, code['단축코드'])
-
-        self.IndiReal.dynamicCall("RequestRTReg(QString, QString)", 'IC', '0001')   # 종합주가지수(KOSPI)
-        self.IndiReal.dynamicCall("RequestRTReg(QString, QString)", 'IC', '1001')   # 종합지수(KOSDAQ)
-        self.IndiReal.dynamicCall("RequestRTReg(QString, QString)", 'IC', '1002')   # KOSDAQ 100
-        self.IndiReal.dynamicCall("RequestRTReg(QString, QString)", 'IC', '2101')   # KOSPI200 종합
-        # self.IndiReal.dynamicCall("RequestRTReg(QString, QString)", 'IK', '2101')   # KOSPI200 Index (추정치)
+            self.IndiReal.dynamicCall("RequestRTReg(QString, QString)", "fc", code['종목코드'])
 
     def _determine_data_type(self, raw_data):
         if not raw_data:
@@ -183,7 +140,7 @@ class SHiIndiClient(QMainWindow):
         #     if datetime.strptime(item['trade_time'], '%Y-%m-%d %H:%M:%S').date() == self.today
         # ]
         processed_data = {
-            'source': 'SHINHANi',
+            'source': 'SHINHANiGX',
             'timestamp': datetime.now().isoformat(),
             'data_type': self._determine_data_type(data),
             'content': data

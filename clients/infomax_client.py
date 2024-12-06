@@ -190,25 +190,19 @@ if __name__ == "__main__":
     try:
         # Excel 초기화 먼저 수행
         if client.initialize_excel():
-            while True:  # 메인 루프
-                # 서버 연결 시도
-                if not client.connect_to_server():
-                    print("서버 연결 실패. 재시도 중...")
-                    time.sleep(5)
-                    continue
-
-                # 데이터 전송 루프
-                while True:
-                    raw_data = client.read_excel_data()
-                    if raw_data:
-                        data = client.process_data(raw_data)
-                        if not client.send_to_server(data):  # 전송 실패 시
-                            print("서버 연결이 끊어졌습니다. 재연결을 시도합니다.")
-                            client.socket.close()  # 기존 소켓 닫기
-                            client.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # 새 소켓 생성
-                            break  # 내부 루프를 빠져나가 재연결 시도
-                        else:
-                            print("서버로 데이터 전송:", data)
+            client.connect_to_server()
+            # 데이터 전송 루프
+            while True:
+                raw_data = client.read_excel_data()
+                if raw_data:
+                    data = client.process_data(raw_data)
+                    if not client.send_to_server(data):  # 전송 실패 시
+                        print("서버 연결이 끊어졌습니다. 재연결을 시도합니다.")
+                        client.socket.close()  # 기존 소켓 닫기
+                        client.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # 새 소켓 생성
+                        break  # 내부 루프를 빠져나가 재연결 시도
+                    else:
+                        print("서버로 데이터 전송:", data)
         else:
             print("Excel 초기화 실패로 프로그램을 종료합니다.")
     except KeyboardInterrupt:
