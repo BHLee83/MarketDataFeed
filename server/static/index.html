@@ -7,6 +7,15 @@
     <style>
         .data-container { margin: 20px; }
         .chart-container { height: 400px; }
+        #tickTable { width: 100%; border-collapse: collapse; }
+        #tickTable th, #tickTable td { 
+            padding: 8px; 
+            text-align: right; 
+        }
+        #tickTable th:nth-child(1), #tickTable td:nth-child(1), 
+        #tickTable th:nth-child(2), #tickTable td:nth-child(2) { 
+            text-align: center; 
+        }
     </style>
 </head>
 <body>
@@ -15,11 +24,11 @@
         <table id="tickTable" border="1">
             <thead>
                 <tr>
-                    <th>소스</th>
                     <th>시간</th>
                     <th>종목코드</th>
                     <th>가격</th>
                     <th>거래량</th>
+                    <th>소스</th>
                 </tr>
             </thead>
             <tbody></tbody>
@@ -37,6 +46,58 @@
     </div>
 
     <script>
+        // 종목별 행 인덱스를 저장하는 객체
+        const itemRows = {};
+        
+        function updateTickTable(data) {
+            const table = document.getElementById('tickTable').getElementsByTagName('tbody')[0];
+            
+            // content 배열의 각 항목에 대해 처리
+            data.content.forEach(tick => {
+                const itemCode = tick.item_code || '-';
+                const rowData = [
+                    new Date(data.timestamp).toLocaleTimeString(),
+                    itemCode,
+                    tick.current_price ? Number(tick.current_price).toLocaleString() : '-',
+                    tick.current_vol ? Number(tick.current_vol).toLocaleString() : '-',
+                    data.source || '-'
+                ];
+                
+                if (itemCode in itemRows) {
+                    // 기존 행 업데이트
+                    const row = table.rows[itemRows[itemCode]];
+                    for (let i = 0; i < rowData.length; i++) {
+                        row.cells[i].textContent = rowData[i];
+                    }
+                } else {
+                    // 새로운 행 추가
+                    const row = table.insertRow(0);
+                    itemRows[itemCode] = 0;
+                    
+                    // 기존 행들의 인덱스 업데이트
+                    for (let code in itemRows) {
+                        if (code !== itemCode) {
+                            itemRows[code]++;
+                        }
+                    }
+                    
+                    // 새 행에 데이터 추가
+                    rowData.forEach(text => {
+                        const cell = row.insertCell();
+                        cell.textContent = text;
+                    });
+                }
+                
+                // 테이블 크기 제한 (예: 최대 100개 종목)
+                while (table.rows.length > 100) {
+                    const lastRow = table.rows[table.rows.length - 1];
+                    const lastItemCode = lastRow.cells[1].textContent;
+                    delete itemRows[lastItemCode];
+                    table.deleteRow(table.rows.length - 1);
+                }
+            });
+        }
+
         // WebSocket 연결 및 재연결 관리
         let ws = null;
         
@@ -49,6 +110,7 @@
             
             ws.onmessage = function(event) {
                 const data = JSON.parse(event.data);
+                console.log('받은 데이터:', data);  // 데이터 구조 확인용 로그
                 
                 switch(data.type) {
                     case 'tick_data':
@@ -79,23 +141,6 @@
         
         // 초기 연결 시작
         connectWebSocket();
-
-        function updateTickTable(tickData) {
-            const table = document.getElementById('tickTable').getElementsByTagName('tbody')[0];
-            // 최근 100개 데이터만 유지
-            while (table.rows.length >= 100) {
-                table.deleteRow(table.rows.length - 1);
-            }
-            
-            tickData.forEach(tick => {
-                const row = table.insertRow(0);
-                row.insertCell(0).textContent = tick.source;
-                row.insertCell(1).textContent = new Date(tick.timestamp).toLocaleTimeString();
-                row.insertCell(2).textContent = tick.item_code;
-                row.insertCell(3).textContent = tick.current_price.toLocaleString();
-                row.insertCell(4).textContent = tick.current_vol.toLocaleString();
-            });
-        }
 
         function updateMinuteChart(minuteData) {
             // Chart.js나 다른 차트 라이브러리를 사용하여 분봉 차트 업데이트
