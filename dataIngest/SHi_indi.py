@@ -117,14 +117,20 @@ class SHiIndiClient(QMainWindow):
         self.strDtTarget = self.leDate.text()   # It must be 'YYYYMMDD' format
 
     def set_tr_chart_id(self, tr):
-        if tr == 'fut_mst':
-            tr_chart_id = 'TR_FCHART'   # 주식 선물
-        elif tr == 'cfut_mst':
-            tr_chart_id = 'TR_CFCHART'  # 상품 선물
-        elif tr == 'fri_mst':
-            tr_chart_id = 'TR_INCHART'   # 해외 지수
-        elif tr == 'gmf_mst':
-            tr_chart_id = 'TR_CMCHART'   # 
+        if tr['구분'] == 'fut_mst':
+            if ['기초자산ID'] == '연결':
+                tr_chart_id = 'TR_FNCHART'   # 주식 연결 선물
+            else:
+                tr_chart_id = 'TR_FCHART'   # 주식 선물
+        elif tr['구분'] == 'cfut_mst':
+            if ['기초자산ID'] == '연결':
+                tr_chart_id = 'TR_CFNCHART'   # 상품 연결 선물
+            else:
+                tr_chart_id = 'TR_CFCHART'  # 상품 선물
+        # elif tr == 'fri_mst':
+        #     tr_chart_id = 'TR_INCHART'   # 해외 지수
+        # elif tr == 'gmf_mst':
+        #     tr_chart_id = 'TR_CMCHART'   # 
         
         return tr_chart_id
 
@@ -142,7 +148,7 @@ class SHiIndiClient(QMainWindow):
         dataType = 'D'
         timeIntvl = '1'
         for i in self.code_list:
-            tr_chart_id = self.set_tr_chart_id(i['구분'])
+            tr_chart_id = self.set_tr_chart_id(i)
             ret = self.IndiTR.dynamicCall("SetQueryName(QString)", tr_chart_id)
             ret = self.IndiTR.dynamicCall("SetSingleData(int, QString)", 0, i['단축코드'])  # 단축코드
             ret = self.IndiTR.dynamicCall("SetSingleData(int, QString)", 1, dataType)    # 1: 분데이터, D:일데이터
@@ -160,7 +166,7 @@ class SHiIndiClient(QMainWindow):
         timeIntvl = ['1']   # 1분봉만 수신
         for i in timeIntvl:
             for j in self.code_list:
-                tr_chart_id = self.set_tr_chart_id(j['구분'])
+                tr_chart_id = self.set_tr_chart_id(j)
                 ret = self.IndiTR.dynamicCall("SetQueryName(QString)", tr_chart_id)
                 ret = self.IndiTR.dynamicCall("SetSingleData(int, QString)", 0, j['단축코드'])  # 단축코드
                 ret = self.IndiTR.dynamicCall("SetSingleData(int, QString)", 1, dataType)    # 1: 분데이터, D:일데이터
@@ -185,10 +191,12 @@ class SHiIndiClient(QMainWindow):
                         dictMst['구분']= name
                         dictMst['단축코드'] = shortCode
                         dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)
+                        dictMst['기초자산ID'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 8)
                 elif name == 'cfut_mst':
                     dictMst['구분']= name
                     dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
                     dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)
+                    dictMst['기초자산ID'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)
                 # elif name == 'fri_mst':
                 #     dictMst['구분']= name
                 #     dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)   # GIC
@@ -200,7 +208,7 @@ class SHiIndiClient(QMainWindow):
                 self.code_list.append(dictMst)
 
         if self.cnt_mst_rcv == len(self.mst_names):
-            # # 수기 포함
+            # 수기 포함
             # manual_list = [
             #     {'구분': 'fri_mst', '단축코드': 'DJI@DJI', '종목명': '다우'},
             #     {'구분': 'fri_mst', '단축코드': 'NAS@IXIC', '종목명': '나스닥'},
@@ -258,6 +266,21 @@ class SHiIndiClient(QMainWindow):
             # for i in manual_list:
             #     self.code_list.append(i)
             self.code_list = [item for item in self.code_list if item]  # self.code_list 에서 값이 비어있는 건 제거
+            # 새로운 데이터를 저장할 리스트
+            new_entries = []
+
+            # 'fut_mst' 연결선물
+            # fut_mst_assets = {item['기초자산ID'] for item in self.code_list if item['구분'] == 'fut_mst'}
+            # for asset in fut_mst_assets:
+            #     new_entries.append({'구분': 'fut_mst', '단축코드': f'{asset}', '기초자산ID': '연결'})
+
+            # 'cfut_mst' 연결선물
+            cfut_mst_assets = {item['기초자산ID'] for item in self.code_list if item['구분'] == 'cfut_mst'}
+            for asset in cfut_mst_assets:
+                new_entries.append({'구분': 'cfut_mst', '단축코드': f'KRDRVFU{asset}', '기초자산ID': '연결'})
+
+            # 기존 데이터에 추가
+            self.code_list.extend(new_entries)
             self.codes = [code['단축코드'] for code in self.code_list]
             self.mst_ready = True
 
@@ -266,7 +289,7 @@ class SHiIndiClient(QMainWindow):
         cnt = self.IndiTR.dynamicCall("GetMultiRowCount()")
         print(f"일 데이터 수신 중: {code}, {cnt}")
         if cnt > 0:
-            if strTRChart == 'TR_FCHART' or strTRChart == 'TR_CFCHART':
+            if any([strTRChart == 'TR_FCHART', strTRChart == 'TR_FNCHART', strTRChart == 'TR_CFCHART', strTRChart == 'TR_CFNCHART']):
                 for i in range(cnt):
                     data = {}
                     data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
@@ -307,9 +330,9 @@ class SHiIndiClient(QMainWindow):
     def procMin(self, strTRChart, code):
         self.cnt_min_rcv += 1
         cnt = self.IndiTR.dynamicCall("GetMultiRowCount()")
-        print(f"분 데이터 수신 중: {code}, {cnt}")
         if cnt > 0:
-            if strTRChart == 'TR_FCHART' or strTRChart == 'TR_CFCHART':
+            print(f"분 데이터 수신 중: {code}, {cnt}")
+            if any([strTRChart == 'TR_FCHART', strTRChart == 'TR_FNCHART', strTRChart == 'TR_CFCHART', strTRChart == 'TR_CFNCHART']):
                 for i in range(cnt):
                     data = {}
                     data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
@@ -409,4 +432,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"프로그램 중 오류 발생: {e}")
     finally:
-        sys.exit(1)
+        sys.exit(0)
