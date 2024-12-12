@@ -10,7 +10,7 @@ class MarketDataProcessor:
         self.db_manager = db_manager
         self.kafka_handler = kafka_handler
         self.consumer = consumer
-        self.topic_tick = Config.KAFKA_TOPICS['RAW_MARKET_DATA_TICK']
+        # self.topic_tick = Config.KAFKA_TOPICS['RAW_MARKET_DATA_TICK']
         self.topic_min = Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE']
         self.topic_day = Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY']
         # self.MAX_CHUNK_SIZE = 100
@@ -20,8 +20,8 @@ class MarketDataProcessor:
         self.symbol_data = {}  # {symbol: {'1m': [], '2m': [], ..., '30m': [], '1d': []}}
         
         # 과거 데이터 로드
-        if self.load_historical_data():
-            print("과거 RAW 데이터 로드 및 TIMESERIES 데이터 생성 성공")
+        if self.load_historical_price_data():
+            print("과거 일/분 데이터 로드 및 TIMESERIES 데이터 생성 성공")
             if self.publish_historical_data():  # 과거 데이터 kafka 각 토픽으로 전송
                 del self.symbol_data    # 종목별 데이터 저장소 비우기
                 print("TIMESERIES 데이터 KAFKA 전송 완료")
@@ -32,10 +32,10 @@ class MarketDataProcessor:
         # 처리 스레드 시작
         self.start_processing_threads()
 
-    def load_historical_data(self):
-        """과거 데이터 로드 및 초기화"""
+    def load_historical_price_data(self):
+        """과거 일/분 데이터 로드 및 초기화"""
         try:
-            # DB에서 모든 종목의 데이터 조회
+            # DB에서 모든 종목의 분/일 데이터 조회
             historical_data = self.db_manager.load_marketdata_price()
 
             # 종목별로 데이터 분류
@@ -152,7 +152,7 @@ class MarketDataProcessor:
                         'symbol': symbol,
                         'data': candle
                     }
-                    if timeframe not in ('tick', '1d'):  # 분봉인 경우 타임프레임 정보 추가
+                    if timeframe != '1d':  # 분봉인 경우 타임프레임 정보 추가
                         data['timeframe'] = timeframe
                     self.kafka_handler.send_data(topic, data)
 
@@ -160,9 +160,7 @@ class MarketDataProcessor:
 
     def set_topic(self, timeframe):
         """timeframe별로 topic 네임 설정"""
-        if timeframe == 'tick':
-            return self.topic_tick
-        elif timeframe == '1d':
+        if timeframe == '1d':
             return self.topic_day
         elif timeframe.endswith('m'):
             return self.topic_min
@@ -189,10 +187,6 @@ class MarketDataProcessor:
 
             # 틱 데이터 캐시에 추가
             self.tick_cache[symbol].append(data)
-
-            # kafka의 tick topic에 전달
-            data_to_send = {'symbol': symbol, 'data': data}
-            self.kafka_handler.send_data(self.topic_tick, data_to_send)
 
             # 1분마다 캔들 업데이트
             self.update_candles(symbol)

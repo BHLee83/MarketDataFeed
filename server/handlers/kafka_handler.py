@@ -115,10 +115,6 @@ class KafkaHandler:
                 num_partitions=partition_count,
                 replication_factor=1
             ), NewTopic(
-                topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA_TICK'],
-                num_partitions=partition_count,
-                replication_factor=1
-            ), NewTopic(
                 topic=Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE'],
                 num_partitions=partition_count,
                 replication_factor=1
