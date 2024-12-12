@@ -375,9 +375,29 @@ class SHiIndiClient(QMainWindow):
             return
         
         # 쿼리 생성
-        columns = ', '.join(data[0].keys())
-        placeholders = ', '.join([':' + col for col in data[0].keys()])
-        query = f'INSERT INTO market_data_price ({columns}) VALUES ({placeholders})'
+        columns = data[0].keys()
+        placeholders = ', '.join([f':{col}' for col in columns])
+        query = f"""
+        MERGE INTO market_data_price target
+        USING (SELECT {', '.join([f':{col} AS {col}' for col in columns])} FROM dual) source
+        ON (target.trd_date = source.trd_date AND
+            target.code = source.code AND
+            target.trd_time = source.trd_time)
+        WHEN MATCHED THEN
+            UPDATE SET
+                target.open = source.open,
+                target.high = source.high,
+                target.low = source.low,
+                target.close = source.close,
+                target.open_int = source.open_int,
+                target.theo_prc = source.theo_prc,
+                target.under_lvl = source.under_lvl,
+                target.trd_volume = source.trd_volume,
+                target.trd_value = source.trd_value
+        WHEN NOT MATCHED THEN
+            INSERT ({', '.join(columns)})
+            VALUES ({placeholders})
+        """
         
         try:
             data_tuples = [tuple(item.values()) for item in data]
