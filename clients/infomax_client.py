@@ -1,10 +1,8 @@
 import win32com.client
 import pythoncom
-import os
 import time
 import socket
 from datetime import datetime
-
 
 import sys
 import os
@@ -85,22 +83,23 @@ class InfomaxClient:
         """Excel 데이터 읽기"""
         try:
             last_row = self.sheet.Cells(self.sheet.Rows.Count, 1).End(-4162).Row
-            current_data = self.sheet.Range(f"A2:B{last_row}").Value
+            current_data = self.sheet.Range(f"A4:C{last_row}").Value
 
             if not current_data:  # 데이터가 없는 경우
                 return []
 
             # 변경된 데이터 추출
             updated_data = []
-            for idx, row in enumerate(current_data, start=2):
-                item_code, current_price = row
-                row_data = (item_code, current_price)
+            for idx, row in enumerate(current_data):
+                item_code, trd_time, current_price = row
+                row_data = (item_code, trd_time, current_price)
 
                 # 이전 데이터와 비교하여 변경 사항이 있는 경우에만 저장
                 if self.previous_data.get(idx) != row_data:
                     updated_data.append({
                         "row": idx,
                         "item_code": item_code,
+                        "trd_time": trd_time,
                         "current_price": current_price
                     })
                     self.previous_data[idx] = row_data  # 이전 데이터 업데이트
