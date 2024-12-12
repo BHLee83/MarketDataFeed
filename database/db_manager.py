@@ -10,6 +10,7 @@ class DatabaseManager:
         """
         Config 클래스에서 DB 연결 정보를 가져와 초기화합니다.
         """
+        oracledb.init_oracle_client(lib_dir=Config.ORACLE_CLIENT_PATH)
         self.config = {
             'user': Config.DB_USER,
             'password': Config.DB_PASSWORD,
@@ -53,17 +54,15 @@ class DatabaseManager:
         query = "SELECT * FROM marketdata_meta"
         with self.get_cursor() as cursor:
             cursor.execute(query)
-            columns = [col[0] for col in cursor.description]
+            columns = [col[0].lower() for col in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-    def load_marketdata_price_daily(self) -> List[Dict]:
-        """마켓 일별 데이터 로드"""
-        # query = "SELECT * FROM marketdata_daily"
-        # 임시 (구 테이블 참조)
-        query = "SELECT asset_name as item_code, base_date as timestamp, open_price as open, high_price as high, low_price as low, close_price as close, volume FROM market_data"
+    def load_marketdata_price(self) -> List[Dict]:
+        """마켓 일/분 데이터 로드"""
+        query = "SELECT * FROM market_data_price ORDER BY trd_date, trd_time"
         with self.get_cursor() as cursor:
             cursor.execute(query)
-            columns = [col[0] for col in cursor.description]
+            columns = [col[0].lower() for col in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def load_marketdata_price_rt(self, start_date: date) -> List[Dict]:
