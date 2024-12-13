@@ -3,14 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>시장 데이터 모니터링</title>
+    <title>Market Data Dashboard</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/table.css">
 </head>
 <body>
     <div class="data-container">
         <h2>실시간 체결 데이터</h2>
-        <table id="tickTable" border="1">
+        <table id="tickTable">
             <thead>
                 <tr>
                     <th>시간</th>
@@ -25,18 +26,17 @@
     </div>
 
     <div class="data-container">
-        <h2>분봉 데이터</h2>
+        <h2>분봉 차트</h2>
         <div id="minuteChart" class="chart-container"></div>
     </div>
 
     <div class="data-container">
-        <h2>거래량 프로파일</h2>
-        <div id="volumeProfile" class="chart-container"></div>
+        <h2>일봉 차트</h2>
+        <div id="dailyChart" class="chart-container"></div>
     </div>
 
-    <!-- <script src="js/utils.js"></script> -->
     <script src="js/tableManager.js"></script>
-    <!-- <script src="js/chartManager.js"></script> -->
+    <script src="js/chartManager.js"></script>
     <script src="js/websocket.js"></script>
 </body>
 </html>

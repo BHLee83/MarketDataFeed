@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from confluent_kafka import Consumer
 import json
 import asyncio
-from typing import List
+from typing import Dict, List
 import threading
 from queue import Queue
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -25,52 +25,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Kafka 메시지를 저장할 큐
-message_queue = Queue()
-
-# Kafka Consumer 설정
-conf = {
-    'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,  # Kafka 서버 주소
-    'group.id': 'web_server_group',
-    'auto.offset.reset': 'earliest' # earliest or latest 체크 필요
+# 데이터 큐 설정
+data_queues = {
+    'tick': Queue(),
+    'minute': Queue(),
+    'daily': Queue()
 }
 
-# WebSocket 연결을 관리하는 클래스
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-
-manager = ConnectionManager()
-
-# Kafka 메시지를 백그라운드에서 처리하는 함수
-def kafka_consumer_thread():
+# Kafka Consumer 설정
+def create_consumer(topic: str):
+    conf = {
+        'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,
+        'group.id': f'web_consumer_{topic}',
+        'auto.offset.reset': 'latest'
+    }
     consumer = Consumer(conf)
-    consumer.subscribe([Config.KAFKA_TOPICS['PROCESSED_DATA']])
+    consumer.subscribe([topic])
+    return consumer
+
+# Kafka Consumer 스레드
+def kafka_consumer_thread(topic_type: str):
+    topics = {
+        'tick': Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
+        'minute': Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE'],
+        'daily': Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY']
+    }
+    
+    consumer = create_consumer(topics[topic_type])
     
     while True:
         try:
-            msg = consumer.poll(timeout=1.0)
+            msg = consumer.poll(1.0)
             if msg is None:
                 continue
             if msg.error():
                 continue
-            
-            # 메시지를 큐에 저장
+                
             data = json.loads(msg.value().decode('utf-8'))
-            message_queue.put(data)
+            data_queues[topic_type].put(data)
         except Exception as e:
-            print(f"Kafka consumer error: {e}")
+            print(f"Consumer error ({topic_type}): {e}")
 
-# Kafka consumer 스레드 시작
-consumer_thread = threading.Thread(target=kafka_consumer_thread, daemon=True)
-consumer_thread.start()
+# WebSocket 연결 관리
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {
+            'tick': [],
+            'minute': [],
+            'daily': []
+        }
+
+    async def connect(self, websocket: WebSocket, data_type: str):
+        await websocket.accept()
+        self.active_connections[data_type].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, data_type: str):
+        self.active_connections[data_type].remove(websocket)
+
+manager = ConnectionManager()
 
 # Prometheus 메트릭스 수집기 설정
 instrumentator = Instrumentator()
@@ -82,44 +94,37 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def read_root():
     return FileResponse("static/index.html")
 
-@app.get("/api/processed-data/{data_type}")
-async def get_processed_data(data_type: str):
-    """Kafka의 PROCESSED_DATA 토픽에서 특정 타입의 데이터 조회"""
-    try:
-        messages = []
-        # 큐에서 최대 100개의 메시지를 가져옴
-        for _ in range(100):
-            try:
-                data = message_queue.get_nowait()
-                if data.get('type') == data_type:
-                    messages.append(data)
-            except:
-                break
-                
-        return JSONResponse(content=messages)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"데이터 조회 실패: {str(e)}")
-
-@app.websocket("/ws/market-data")
-async def websocket_endpoint(websocket: WebSocket):
-    """실시간 시장 데이터 웹소켓 엔드포인트"""
-    await manager.connect(websocket)
+@app.websocket("/ws/{data_type}")
+async def websocket_endpoint(websocket: WebSocket, data_type: str):
+    if data_type not in ['tick', 'minute', 'daily']:
+        await websocket.close()
+        return
+        
+    await manager.connect(websocket, data_type)
+    
     try:
         while True:
-            # 큐에서 메시지를 비동기적으로 가져옴
             try:
-                data = message_queue.get_nowait()
+                # 큐에서 데이터 가져오기
+                data = data_queues[data_type].get_nowait()
                 await websocket.send_json(data)
             except:
-                # 큐가 비어있으면 잠시 대기
                 await asyncio.sleep(0.1)
                 
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        print(f"클라이언트 연결 종료")
+        manager.disconnect(websocket, data_type)
     except Exception as e:
-        print(f"WebSocket 오류: {e}")
-        manager.disconnect(websocket)
+        print(f"WebSocket error: {e}")
+        manager.disconnect(websocket, data_type)
+
+# Kafka consumer 스레드 시작
+for data_type in ['tick', 'minute', 'daily']:
+    thread = threading.Thread(
+        target=kafka_consumer_thread,
+        args=(data_type,),
+        daemon=True
+    )
+    thread.start()
 
 if __name__ == "__main__":
     import uvicorn

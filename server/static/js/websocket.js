@@ -1,39 +1,55 @@
 class WebSocketManager {
     constructor() {
-        this.ws = null;
+        this.connections = {};
         this.tableManager = new TableManager();
         this.chartManager = new ChartManager();
+        this.initializeConnections();
     }
 
-    connect() {
-        this.ws = new WebSocket(`ws://${window.location.host}/ws/market-data`);
-        this.setupEventHandlers();
+    initializeConnections() {
+        // 각 데이터 타입별 웹소켓 연결 초기화
+        ['tick', 'minute', 'daily'].forEach(type => {
+            this.createConnection(type);
+        });
     }
 
-    setupEventHandlers() {
-        this.ws.onopen = () => console.log('WebSocket 연결됨');
-        this.ws.onmessage = (event) => this.handleMessage(event);
-        this.ws.onclose = () => this.handleClose();
-        this.ws.onerror = (err) => this.handleError(err);
-    }
-
-    handleMessage(event) {
-        const data = JSON.parse(event.data);
+    createConnection(type) {
+        const ws = new WebSocket(`ws://${window.location.host}/ws/${type}`);
         
-        switch(data.type) {
-            case 'tick_data':
-                this.tableManager.updateTable(data.data);
+        ws.onopen = () => console.log(`${type} WebSocket 연결됨`);
+        
+        ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+            this.handleMessage(type, message);
+        };
+        
+        ws.onclose = () => {
+            console.log(`${type} WebSocket 연결 종료. 재연결 시도...`);
+            setTimeout(() => this.createConnection(type), 1000);
+        };
+        
+        ws.onerror = (err) => {
+            console.error(`${type} WebSocket 오류:`, err);
+            ws.close();
+        };
+        
+        this.connections[type] = ws;
+    }
+
+    handleMessage(type, data) {
+        switch(type) {
+            case 'tick':
+                this.tableManager.updateTable(data);
                 break;
-            case 'minute_data':
+            case 'minute':
                 this.chartManager.updateMinuteChart(data);
                 break;
-            // ... other cases
+            case 'daily':
+                this.chartManager.updateDailyChart(data);
+                break;
         }
     }
-
-    // ... other methods
 }
 
-// Initialize on load
-const wsManager = new WebSocketManager();
-wsManager.connect(); 
+// 초기화
+const wsManager = new WebSocketManager(); 
