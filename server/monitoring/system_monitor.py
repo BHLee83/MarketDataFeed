@@ -29,7 +29,7 @@ class SystemMonitor:
         }
         
         self.admin_client = AdminClient({'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS})
-        self.topic = Config.KAFKA_TOPICS['RAW_MARKET_DATA']
+        self.topic = [Config.KAFKA_TOPICS['RAW_MARKET_DATA'], Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE'], Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY']]
         self.consumer = Consumer(self.consumer_conf)
         self.consumer.subscribe([self.topic], on_assign=self._on_assign)
         
@@ -80,7 +80,7 @@ class SystemMonitor:
             self._update_partition_info()
             
             # 모든 파티션의 TopicPartition 객체 생성
-            tps = [TopicPartition(self.topic, p) for p in self._partitions]
+            tps = [TopicPartition(topic, p) for topic, partitions in self._partitions.items() for p in partitions]
             
             # 커밋된 오프셋과 현재 오프셋 조회
             committed_offsets = self._get_committed_offsets(tps)
@@ -98,11 +98,16 @@ class SystemMonitor:
            current_time - self._last_partition_update > 300:  # 5분마다 갱신
             try:
                 cluster_metadata = self.admin_client.list_topics(timeout=10)
-                if self.topic not in cluster_metadata.topics:
-                    monitoring_logger.error(f"토픽을 찾을 수 없음: {self.topic}")
-                    return
-                self._partitions = cluster_metadata.topics[self.topic].partitions
-                self._last_partition_update = current_time
+                self._partitions = {}  # 모든 토픽의 파티션 정보를 저장
+
+                for topic in self.topic:
+                    if topic not in cluster_metadata.topics:
+                        monitoring_logger.error(f"토픽을 찾을 수 없음: {topic}")
+                        return
+                    self._partitions[topic] = cluster_metadata.topics[topic].partitions
+
+                if self._partitions:  # 하나 이상의 유효한 토픽이 존재할 경우에만 업데이트
+                    self._last_partition_update = current_time
             except KafkaException as ke:
                 monitoring_logger.error(f"토픽 메타데이터 조회 실패: {ke}")
                 return
