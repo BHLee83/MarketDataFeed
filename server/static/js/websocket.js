@@ -7,7 +7,6 @@ class WebSocketManager {
     }
 
     initializeConnections() {
-        // 각 데이터 타입별 웹소켓 연결 초기화
         ['tick', 'minute', 'daily'].forEach(type => {
             this.createConnection(type);
         });
@@ -19,8 +18,8 @@ class WebSocketManager {
         ws.onopen = () => console.log(`${type} WebSocket 연결됨`);
         
         ws.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            this.handleMessage(type, message);
+            const data = JSON.parse(event.data);
+            this.handleMessage(type, data);
         };
         
         ws.onclose = () => {

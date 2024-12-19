@@ -13,6 +13,8 @@ from queue import Queue
 from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from database.db_manager import DatabaseManager
+from datetime import datetime
 
 app = FastAPI()
 
@@ -26,45 +28,85 @@ app.add_middleware(
 )
 
 # 데이터 큐 설정
-data_queues = {
-    'tick': Queue(),
-    'minute': Queue(),
-    'daily': Queue()
-}
+data_queues = {}  # WebSocket 연결별 데이터 큐
 
 # Kafka Consumer 설정
-def create_consumer(topic: str):
-    conf = {
+def create_kafka_consumer(topic: str, from_beginning: bool = True):
+    consumer = Consumer({
         'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,
-        'group.id': f'web_consumer_{topic}',
-        'auto.offset.reset': 'latest'
-    }
-    consumer = Consumer(conf)
+        'group.id': f'web_consumer_{topic}_{datetime.now().timestamp()}',  # 유니크한 그룹 ID
+        'auto.offset.reset': 'earliest' if from_beginning else 'latest'
+    })
     consumer.subscribe([topic])
     return consumer
 
-# Kafka Consumer 스레드
-def kafka_consumer_thread(topic_type: str):
-    topics = {
+# Kafka 데이터 처리 스레드
+def kafka_consumer_thread(timeframe: str, queue: Queue, symbol: str, interval: str = None):
+    topic = {
         'tick': Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
         'minute': Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE'],
-        'daily': Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY']
-    }
+        'day': Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY']
+    }.get(timeframe)
     
-    consumer = create_consumer(topics[topic_type])
+    consumer = create_kafka_consumer(topic, from_beginning=True)
     
-    while True:
-        try:
+    # 과거 데이터 로드
+    messages = []
+    try:
+        while True:
+            msg = consumer.poll(1.0)
+            if msg is None:
+                break
+            if msg.error():
+                continue
+            
+            data = json.loads(msg.value().decode('utf-8'))
+            
+            # 분봉 데이터의 경우 요청한 interval만 필터링
+            if timeframe == 'minute' and interval:
+                if 'timeframe' not in data or data['timeframe'] != interval:
+                    continue
+            
+            if data['symbol'] == symbol:
+                messages.append(data)
+            
+            # 충분한 과거 데이터를 로드했다면 중단
+            # if len(messages) >= 1000:  # 예: 최대 1000개 캔들
+            #     break
+                
+        # 과거 데이터를 한번에 전송
+        if messages:
+            queue.put({
+                'type': 'historical_data',
+                'data': messages
+            })
+            print(f"Loaded historical data of symbol {symbol}: {len(messages)} candles")
+            
+        # 실시간 데이터 처리
+        while True:
             msg = consumer.poll(1.0)
             if msg is None:
                 continue
             if msg.error():
                 continue
-                
+            
             data = json.loads(msg.value().decode('utf-8'))
-            data_queues[topic_type].put(data)
-        except Exception as e:
-            print(f"Consumer error ({topic_type}): {e}")
+            
+            # 분봉 데이터의 경우 요청한 interval만 필터링
+            if timeframe == 'minute' and interval:
+                if 'timeframe' not in data or data['timeframe'] != interval:
+                    continue
+                    
+            if data['symbol'] == symbol:
+                queue.put({
+                    'type': 'market_data',
+                    'data': data
+                })
+                
+    except Exception as e:
+        print(f"Kafka consumer error: {e}")
+    finally:
+        consumer.close()
 
 # WebSocket 연결 관리
 class ConnectionManager:
@@ -88,43 +130,70 @@ manager = ConnectionManager()
 instrumentator = Instrumentator()
 
 # 정적 파일 서비스 설정
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="server/static"), name="static")
 
 @app.get("/")
 async def read_root():
     return FileResponse("static/index.html")
 
-@app.websocket("/ws/{data_type}")
-async def websocket_endpoint(websocket: WebSocket, data_type: str):
-    if data_type not in ['tick', 'minute', 'daily']:
-        await websocket.close()
-        return
-        
-    await manager.connect(websocket, data_type)
-    
+@app.get("/api/symbols")
+async def get_symbols():
+        db_manager = DatabaseManager()
+        meta = db_manager.load_marketdata_meta()
+        symbols = [i['symbol'] for i in meta]
+        return {"symbols": symbols}
+
+@app.websocket("/ws/chart/{timeframe}/{symbol}")
+async def websocket_endpoint(websocket: WebSocket, timeframe: str, symbol: str, interval: str = None):
     try:
+        await websocket.accept()
+        print(f"New WebSocket connection: timeframe={timeframe}, symbol={symbol}, interval={interval}")
+        
+        queue = Queue()
+        data_queues[websocket] = queue
+        current_symbol = symbol
+        
+        # Kafka consumer 스레드 시작
+        kafka_thread = threading.Thread(
+            target=kafka_consumer_thread,
+            args=(timeframe, queue, current_symbol, interval),
+            daemon=True
+        )
+        kafka_thread.start()
+        
         while True:
             try:
-                # 큐에서 데이터 가져오기
-                data = data_queues[data_type].get_nowait()
-                await websocket.send_json(data)
-            except:
-                await asyncio.sleep(0.1)
+                # Kafka 데이터 처리
+                while not queue.empty():
+                    market_data = queue.get_nowait()
+                    print(f"Sending data to client: {market_data}")  # 디버그용
+                    await websocket.send_json(market_data)
                 
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, data_type)
-    except Exception as e:
-        print(f"WebSocket error: {e}")
-        manager.disconnect(websocket, data_type)
-
-# Kafka consumer 스레드 시작
-for data_type in ['tick', 'minute', 'daily']:
-    thread = threading.Thread(
-        target=kafka_consumer_thread,
-        args=(data_type,),
-        daemon=True
-    )
-    thread.start()
+                # 클라이언트 메시지 처리
+                try:
+                    data = await asyncio.wait_for(websocket.receive_json(), timeout=0.1)
+                    if data.get('type') == 'symbol_change':
+                        current_symbol = data['symbol']
+                        # 심볼 변경 시 새로운 Kafka consumer 스레드 시작
+                        kafka_thread = threading.Thread(
+                            target=kafka_consumer_thread,
+                            args=(timeframe, queue, current_symbol, interval),
+                            daemon=True
+                        )
+                        kafka_thread.start()
+                except asyncio.TimeoutError:
+                    pass  # 타임아웃은 정상적인 상황
+                    
+            except WebSocketDisconnect:
+                print("WebSocket disconnected")
+                break
+            except Exception as e:
+                print(f"WebSocket error: {e}")
+                break
+                
+    finally:
+        if websocket in data_queues:
+            del data_queues[websocket]
 
 if __name__ == "__main__":
     import uvicorn

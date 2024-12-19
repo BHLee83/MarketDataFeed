@@ -71,3 +71,48 @@ body {
     height: 150px;
   }
   
+  .dashboard {
+    padding: 20px;
+    font-family: Arial, sans-serif;
+  }
+  
+  .chart-controls {
+    margin-bottom: 20px;
+  }
+  
+  .chart-controls select {
+    margin-right: 10px;
+    padding: 5px;
+    font-size: 14px;
+  }
+  
+  #candleChart {
+    position: relative;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+  }
+  
+  .tooltip {
+    position: absolute;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    border-radius: 4px;
+    pointer-events: none;
+    font-size: 12px;
+    z-index: 100;
+  }
+  
+  .candlestick .wick {
+    stroke-width: 1;
+  }
+  
+  .candlestick .body {
+    stroke: none;
+  }
+  
+  .candlestick .hover-area:hover {
+    cursor: crosshair;
+  }
+  

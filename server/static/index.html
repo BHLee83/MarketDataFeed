@@ -1,42 +1,33 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Market Data Dashboard</title>
-    <script src="https://d3js.org/d3.v6.min.js"></script>
-    <link rel="stylesheet" href="css/styles.css">
-    <link rel="stylesheet" href="css/table.css">
+    <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
-    <div class="data-container">
-        <h2>실시간 체결 데이터</h2>
-        <table id="tickTable">
-            <thead>
-                <tr>
-                    <th>시간</th>
-                    <th>종목코드</th>
-                    <th>가격</th>
-                    <th>거래량</th>
-                    <th>소스</th>
-                </tr>
-            </thead>
-            <tbody></tbody>
-        </table>
+    <div class="dashboard">
+        <div class="chart-controls">
+            <select id="symbolSelect"></select>
+            <select id="timeframeSelect">
+                <option value="1m">1분</option>
+                <option value="2m">2분</option>
+                <option value="3m">3분</option>
+                <option value="5m">5분</option>
+                <option value="10m">10분</option>
+                <option value="15m">15분</option>
+                <option value="30m">30분</option>
+                <option value="1d">1일</option>
+            </select>
+            <select id="dateRangeSelect">
+                <option value="today">오늘</option>
+                <option value="1d">1일</option>
+                <option value="1w">1주일</option>
+                <option value="1m">1개월</option>
+            </select>
+        </div>
+        <div id="candleChart"></div>
     </div>
-
-    <div class="data-container">
-        <h2>분봉 차트</h2>
-        <div id="minuteChart" class="chart-container"></div>
-    </div>
-
-    <div class="data-container">
-        <h2>일봉 차트</h2>
-        <div id="dailyChart" class="chart-container"></div>
-    </div>
-
-    <script src="js/tableManager.js"></script>
-    <script src="js/chartManager.js"></script>
-    <script src="js/websocket.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="/static/js/chartManager.js"></script>
 </body>
 </html>
