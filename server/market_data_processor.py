@@ -23,7 +23,7 @@ class MarketDataProcessor:
         if self.load_historical_price_data():
             print("과거 일/분 데이터 로드 및 TIMESERIES 데이터 생성 성공")
             if self.publish_historical_data():  # 과거 데이터 kafka 각 토픽으로 전송
-                del self.symbol_data    # 종목별 데이터 저장소 비우기
+                self.symbol_data = {}    # 종목별 데이터 저장소 비우기
                 print("TIMESERIES 데이터 KAFKA 전송 완료")
         
         # 실시간 데이터 처리를 위한 캐시
@@ -106,11 +106,29 @@ class MarketDataProcessor:
             current_candle = minute_data[i]
             current_time = int(current_candle['time'])
             current_date = current_candle['date']
+            
+            # 시간을 시와 분으로 분리
+            current_hour = current_time // 100
+            current_minute = current_time % 100
+            
             # 타겟 시간을 interval 경계로 맞춤
-            target_time = ((current_time - 1) // interval + 1) * interval
-
-            # 날짜와 시간을 함께 저장하여 고유 시간대를 구분
-            target_datetime = (current_date, target_time)
+            target_minute = ((current_minute - 1) // interval + 1) * interval
+            
+            # 시간 처리 (분이 60 이상인 경우 시간 조정)
+            target_hour = current_hour + (target_minute // 60)
+            target_minute = target_minute % 60
+            
+            # 날짜 처리 (시간이 24 이상인 경우 다음날로 조정)
+            target_date = current_date
+            if target_hour >= 24:
+                # YYYYMMDD 형식의 날짜를 datetime으로 변환
+                date_obj = datetime.strptime(current_date, '%Y%m%d')
+                # 하루를 더한 후 다시 문자열로 변환
+                target_date = (date_obj + timedelta(days=1)).strftime('%Y%m%d')
+                target_hour = target_hour % 24
+                
+            target_time = target_hour * 100 + target_minute
+            target_datetime = (target_date, target_time)
 
             # 이미 처리된 시간대는 건너뜀
             if target_datetime in processed_times:
@@ -118,19 +136,21 @@ class MarketDataProcessor:
 
             # 같은 날짜이고, 현재 시간 이하인 데이터만 선택
             chunk = [candle for candle in minute_data[i:] 
-                    if candle['date'] == current_date and int(candle['time']) < target_time]
+                    if (candle['date'] == current_date and int(candle['time']) < target_time) or
+                       (candle['date'] == target_date and int(candle['time']) == target_time)]
 
             # target_time과 정확히 일치하는 캔들 추가
             exact_match = next((candle for candle in minute_data[i:] 
-                            if candle['date'] == current_date and int(candle['time']) == target_time), None)
+                            if candle['date'] == target_date and 
+                            int(candle['time']) == target_time), None)
             if exact_match:
                 chunk.append(exact_match)
             
             # chunk에 최소한의 데이터가 있다면 캔들 생성
             if chunk:
                 temp_candle = {
-                    'date': current_date,
-                    'time': str(target_time),
+                    'date': target_date,  # 수정된 날짜 사용
+                    'time': f"{target_time:04d}",
                     'open': chunk[0]['open'],
                     'high': max(candle['high'] for candle in chunk),
                     'low': min(candle['low'] for candle in chunk),
@@ -206,6 +226,7 @@ class MarketDataProcessor:
             self.symbol_data[symbol]['1m'].append(new_candle)
             # kafka의 minute topic에 전달
             data_to_send = {'symbol': symbol, 'timeframe': '1m', 'data': new_candle}
+            print("kafka의 minute topic에 전달: ", data_to_send)
             self.kafka_handler.send_data(self.topic_min, data_to_send)
             
             # 상위 타임프레임 업데이트
@@ -247,8 +268,10 @@ class MarketDataProcessor:
         for tf, minutes in timeframes.items():
             candles = self.symbol_data[symbol][tf]
             current_time = int(new_candle['time'])
+            current_minutes = (current_time // 100) * 60 + (current_time % 100)
             # 완성 시각 계산
-            target_time = ((current_time - 1) // minutes) * minutes + minutes
+            target_minutes = ((current_minutes - 1) // minutes) * minutes + minutes
+            target_time = (target_minutes // 60) * 100 + (target_minutes % 60)  # 'HHMM' 형식으로 복원
             if len(candles) == 0 or self.is_new_timeframe(new_candle, candles[-1], minutes):
                 # 새로운 캔들 시작
                 new_candle_copy = new_candle.copy()
@@ -263,8 +286,10 @@ class MarketDataProcessor:
                 last_candle['close'] = new_candle['close']
                 last_candle['volume'] += new_candle['volume']
                 data = last_candle
+
             # kafka의 minute topic에 전달
             data_to_send = {'symbol': symbol, 'timeframe': tf, 'data': data}
+            print("kafka의 minute topic에 전달: ", data_to_send)
             self.kafka_handler.send_data(self.topic_min, data_to_send)
 
     def is_new_timeframe(self, new_candle, last_candle, minutes):
@@ -297,6 +322,7 @@ class MarketDataProcessor:
             data = last_candle
         # kafka의 minute topic에 전달
         data_to_send = {'symbol': symbol, 'data': data}
+        print("kafka의 day topic에 전달: ", data_to_send)
         self.kafka_handler.send_data(self.topic_day, data_to_send)
 
     def get_chart_data(self, symbol, timeframe):
