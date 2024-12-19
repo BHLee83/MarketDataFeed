@@ -28,6 +28,7 @@ class SHiIndiClient(QMainWindow):
         self.IndiReal.ReceiveRTData.connect(self.ReceiveRTData)
         self.mst_ready = False
         self.mst_names = []
+        self.cnt_mst_rcv = 0
         self.code_list = []
         self.rqidD = {}
         self.today = datetime.today()
@@ -52,7 +53,7 @@ class SHiIndiClient(QMainWindow):
             
             self.getCodeList()  # 종목코드 리스트 수신
             if self.mst_ready:
-                print(f"종목코드 리스트 수신 성공: {self.code_list}")
+                print(f"종목코드 리스트 수신 성공!")
             else:
                 print("종목코드 리스트 수신 실패!")
                 return False
@@ -89,10 +90,10 @@ class SHiIndiClient(QMainWindow):
     def ReceiveData(self, rqid):
         """데이터 수신시"""
         name = self.rqidD[rqid]
-        print(f"종목코드 리스트 수신 중: {name}")
-
         if name in self.mst_names:
+            self.cnt_mst_rcv += 1
             cnt = self.IndiTR.dynamicCall("GetMultiRowCount()")
+            print(f"종목코드 리스트 수신: {name}, {cnt}")
             if cnt > 0:
                 for i in range(cnt):
                     dictMst = {}
@@ -102,26 +103,30 @@ class SHiIndiClient(QMainWindow):
                             dictMst['구분']= name
                             dictMst['단축코드'] = shortCode
                             dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)
+                            dictMst['기초자산ID'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 8)
                     elif name == 'cfut_mst':
                         dictMst['구분']= name
                         dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
                         dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)
+                        dictMst['기초자산ID'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)
                     elif name == 'fri_mst':
                         dictMst['구분']= name
-                        dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)   # 심벌
+                        dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)   # GIC
+                        # dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)   # 심벌
                         dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)
-                    else:
+                    elif name == 'gmf_mst':
                         dictMst['구분']= name
                         dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
                         dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)
+                        dictMst['기초자산ID'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 5)
                     self.code_list.append(dictMst)
 
-            if name == self.mst_names[-1]:
-                dictMst = {'구분': 'c_mst', '단축코드': 'USD00', '종목명': 'USDKRW'}
-                self.code_list.append(dictMst)
+            if self.cnt_mst_rcv == len(self.mst_names):
+                self.code_list = [item for item in self.code_list if item]  # self.code_list 에서 값이 비어있는 건 제거
+                # 수기 추가
+                self.code_list.append({'구분': 'c_mst', '단축코드': 'USD00', '종목명': 'USDKRW'})   # USDKRW spot
                 self.mst_ready = True
 
-        self.code_list = [item for item in self.code_list if item]  # self.code_list 에서 값이 비어있는 건 제거
         self.event_loop.exit()
 
     def ReceiveRTData(self, RealType):
@@ -139,13 +144,13 @@ class SHiIndiClient(QMainWindow):
             current_price = self.IndiReal.dynamicCall("GetSingleData(int)", 3)  # 현재가
             current_vol = self.IndiReal.dynamicCall("GetSingleData(int)", 9)  # 단위체결량
         elif RealType == 'OC':
-            print("데이터 수신됨. 작업 필요")
+            print("야간 달러선물 데이터 수신됨. 작업 필요")
 
         data = [{'item_code': item_code, 'trade_time': trade_time, 'current_price': current_price, 'current_vol': current_vol}]
         print(f"수신데이터: {data}")
         processed_data = self.process_data(data)
-        if not self.send_to_server(processed_data):
-            self.connect_to_server()
+        if not self.send_to_server(processed_data): # 전송 실패하면
+            self.connect_to_server()    # 서버 연결 시도
 
     def request_RT_data(self):
         for code in self.code_list:
@@ -241,4 +246,4 @@ if __name__ == "__main__":
         print(f"프로그램 중 오류 발생: {e}")
     finally:
         client.socket.close()   # 소켓 연결 종료
-        sys.exit(1)
+        sys.exit(0)

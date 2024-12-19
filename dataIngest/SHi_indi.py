@@ -118,12 +118,12 @@ class SHiIndiClient(QMainWindow):
 
     def set_tr_chart_id(self, tr):
         if tr['구분'] == 'fut_mst':
-            if ['기초자산ID'] == '연결':
+            if tr['종목명'].endswith('연결'):
                 tr_chart_id = 'TR_FNCHART'   # 주식 연결 선물
             else:
                 tr_chart_id = 'TR_FCHART'   # 주식 선물
         elif tr['구분'] == 'cfut_mst':
-            if ['기초자산ID'] == '연결':
+            if tr['종목명'].endswith('연결'):
                 tr_chart_id = 'TR_CFNCHART'   # 상품 연결 선물
             else:
                 tr_chart_id = 'TR_CFCHART'  # 상품 선물
@@ -266,18 +266,10 @@ class SHiIndiClient(QMainWindow):
             # for i in manual_list:
             #     self.code_list.append(i)
             self.code_list = [item for item in self.code_list if item]  # self.code_list 에서 값이 비어있는 건 제거
-            # 새로운 데이터를 저장할 리스트
             new_entries = []
-
-            # 'fut_mst' 연결선물
-            # fut_mst_assets = {item['기초자산ID'] for item in self.code_list if item['구분'] == 'fut_mst'}
-            # for asset in fut_mst_assets:
-            #     new_entries.append({'구분': 'fut_mst', '단축코드': f'{asset}', '기초자산ID': '연결'})
-
-            # 'cfut_mst' 연결선물
             cfut_mst_assets = {item['기초자산ID'] for item in self.code_list if item['구분'] == 'cfut_mst'}
-            for asset in cfut_mst_assets:
-                new_entries.append({'구분': 'cfut_mst', '단축코드': f'KRDRVFU{asset}', '기초자산ID': '연결'})
+            for asset in cfut_mst_assets:   # cfut_mst 연결선물
+                    new_entries.append({'구분': 'cfut_mst', '단축코드': f'KRDRVFU{asset}', '종목명': f'{asset} 연결', '기초자산ID': asset})
 
             # 기존 데이터에 추가
             self.code_list.extend(new_entries)
@@ -350,22 +342,22 @@ class SHiIndiClient(QMainWindow):
                     if float(data['close']) != 0:
                         self.data_min.append(data)
             # elif strTRChart == 'TR_ICHART' or strTRChart == 'TR_INCHART' or strTRChart == 'TR_CMCHART':
-            #     for i in range(cnt):
-            #         data = {}
-            #         data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
-            #         data['code'] = code
-            #         data['trd_time'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)    # 체결시간
-            #         data['open'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)    # 시가
-            #         data['high'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)    # 고가
-            #         data['low'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)     # 저가
-            #         data['close'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 5)   # 현재가
-            #         data['open_int'] = None
-            #         data['theo_prc'] = None
-            #         data['under_lvl'] = None
-            #         data['trd_volume'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 6)     # 단위거래량
-            #         data['trd_value'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 7)     # 단위거래대금
-            #         if float(data['close']) != 0:
-            #             self.data_min.append(data)
+                for i in range(cnt):
+                    data = {}
+                    data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
+                    data['code'] = code
+                    data['trd_time'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)    # 체결시간
+                    data['open'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)    # 시가
+                    data['high'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)    # 고가
+                    data['low'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)     # 저가
+                    data['close'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 5)   # 현재가
+                    data['open_int'] = None
+                    data['theo_prc'] = None
+                    data['under_lvl'] = None
+                    data['trd_volume'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 6)     # 단위거래량
+                    data['trd_value'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 7)     # 단위거래대금
+                    if float(data['close']) != 0:
+                        self.data_min.append(data)
         if self.cnt_min_rcv == len(self.code_list):
             print("분 데이터 수신 완료")
             self.insert_to_db(self.data_min)
