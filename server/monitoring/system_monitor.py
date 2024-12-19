@@ -21,7 +21,7 @@ class SystemMonitor:
             'socket.receive.buffer.bytes': 67108864,  # 소켓 버퍼 크기 유지
             'enable.auto.commit': True,  # 자동 커밋 유지
             'auto.commit.interval.ms': 1000,  # 커밋 간격을 유지, 더 낮출 수도 있음
-            'session.timeout.ms': 30000,  # 연결 안정성을 위해 기본값 유지
+            'session.timeout.ms': 30000,  # 연결 안정성을 위해 기본값 ���지
             'heartbeat.interval.ms': 10000,  # 세션 타임아웃의 1/3로 유지
             'max.poll.interval.ms': 300000,  # 긴 처리 작업 허용
             'fetch.min.bytes': 1,  # 즉시 가져오기를 유지
@@ -29,9 +29,9 @@ class SystemMonitor:
         }
         
         self.admin_client = AdminClient({'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS})
-        self.topic = [Config.KAFKA_TOPICS['RAW_MARKET_DATA'], Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE'], Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY']]
+        self.topics = [Config.KAFKA_TOPICS['RAW_MARKET_DATA']]
         self.consumer = Consumer(self.consumer_conf)
-        self.consumer.subscribe([self.topic], on_assign=self._on_assign)
+        self.consumer.subscribe([self.topics], on_assign=self._on_assign)
         
         self.running = True
         self.metrics = defaultdict(dict)
@@ -60,7 +60,7 @@ class SystemMonitor:
     def _consume_messages(self):
         """메시지 소비 공통 로직"""
         try:
-            messages = self.consumer.consume(num_messages=2000, timeout=0.1)
+            messages = self.consumer.consume(num_messages=100000, timeout=5.0)
             monitoring_logger.info(f"소비된 메시지 수: {len(messages)}")
             self.last_consumed_messages = messages  # 메시지 캐시 업데이트
             return messages
@@ -76,18 +76,67 @@ class SystemMonitor:
             if messages:
                 self.last_consumed_messages = messages
             
-            # 파티션 정보 업데이트
-            self._update_partition_info()
+            current_time = time.time()
             
-            # 모든 파티션의 TopicPartition 객체 생성
-            tps = [TopicPartition(topic, p) for topic, partitions in self._partitions.items() for p in partitions]
-            
-            # 커밋된 오프셋과 현재 오프셋 조회
-            committed_offsets = self._get_committed_offsets(tps)
-            
-            # 각 파티션별 지연 계산 및 메트릭 업데이트
-            self._calculate_partition_lags(tps, committed_offsets)
-            
+            # 파티션 정보 업데이트 (10초마다)
+            if not hasattr(self, '_last_partition_update') or \
+               current_time - getattr(self, '_last_partition_update', 0) > 10:
+                
+                try:
+                    # 실제 존재하는 파티션 정보만 가져오기
+                    cluster_metadata = self.admin_client.list_topics(timeout=10)
+                    self._partitions = {}
+
+                    for topic in self.topics:
+                        if topic not in cluster_metadata.topics:
+                            monitoring_logger.warning(f"토픽을 찾을 수 없음: {topic}")
+                            continue
+                        topic_metadata = cluster_metadata.topics[topic]
+                        self._partitions[topic] = {
+                            p_id: p_meta for p_id, p_meta in topic_metadata.partitions.items()
+                        }
+
+                    if self._partitions:
+                        self._last_partition_update = current_time
+                except KafkaException as ke:
+                    monitoring_logger.error(f"토픽 메타데이터 조회 실패: {ke}")
+                    return
+
+                # 각 토픽의 실제 파티션에 대한 TopicPartition 객체 생성
+                tps = []
+                for topic, partitions in self._partitions.items():
+                    tps.extend([TopicPartition(topic, p) for p in partitions.keys()])
+
+                # 커밋된 오프셋 조회 전에 consumer assign
+                self.consumer.assign(tps)
+                
+                # 각 파티션의 시작 오프셋으로 위치 설정
+                low_offsets = {}  # 시작 오프셋 저장
+                for tp in tps:
+                    try:
+                        # 파티션의 시작 오프셋 조회
+                        low_offset, _ = self.consumer.get_watermark_offsets(tp)
+                        low_offsets[tp] = low_offset
+                        # TopicPartition에 offset 설정 후 seek
+                        tp.offset = low_offset
+                        self.consumer.seek(tp)
+                    except KafkaException as e:
+                        monitoring_logger.error(f"파티션 {tp.topic}[{tp.partition}] seek 실패: {e}")
+                
+                # 커밋된 오프셋 조회
+                committed = self.consumer.committed(tps)  # 리스트로 반환됨
+                committed_offsets = {}
+                
+                # committed는 tps와 같은 순서로 반환됨
+                for i, tp in enumerate(tps):
+                    if committed[i] is not None:
+                        committed_offsets[tp] = committed[i].offset
+                    else:
+                        committed_offsets[tp] = low_offsets[tp]
+                
+                # 각 토픽/파티션의 지연 계산
+                self._calculate_partition_lags(tps, committed_offsets)
+
         except Exception as e:
             monitoring_logger.error(f"Kafka 모니터링 오류: {e}", exc_info=True)
 
@@ -100,7 +149,7 @@ class SystemMonitor:
                 cluster_metadata = self.admin_client.list_topics(timeout=10)
                 self._partitions = {}  # 모든 토픽의 파티션 정보를 저장
 
-                for topic in self.topic:
+                for topic in self.topics:
                     if topic not in cluster_metadata.topics:
                         monitoring_logger.error(f"토픽을 찾을 수 없음: {topic}")
                         return
@@ -109,7 +158,7 @@ class SystemMonitor:
                 if self._partitions:  # 하나 이상의 유효한 토픽이 존재할 경우에만 업데이트
                     self._last_partition_update = current_time
             except KafkaException as ke:
-                monitoring_logger.error(f"토픽 메타데이터 조회 실패: {ke}")
+                monitoring_logger.error(f"토픽 메타��이터 조회 실패: {ke}")
                 return
 
     def _get_committed_offsets(self, tps):
@@ -132,17 +181,34 @@ class SystemMonitor:
 
     def _calculate_partition_lags(self, tps, committed_offsets):
         """각 파티션의 지연 계산 및 메트릭 업데이트"""
+        self.metrics['kafka'] = {}  # 메트릭 초기화
+        
         for tp in tps:
-            low, high = self.consumer.get_watermark_offsets(tp)
-            committed_offset = committed_offsets.get(tp)
+            try:
+                low, high = self.consumer.get_watermark_offsets(tp)
+                committed_offset = committed_offsets.get(tp)
 
-            if committed_offset is None:
-                monitoring_logger.warning(f"파티션 {tp.partition}의 커밋된 오프셋이 None입니다. 지연을 계산할 수 없습니다.")
-                continue  # 커밋된 오프셋이 없으면 다음 파티션으로 넘어감
+                if committed_offset is None or committed_offset < 0:
+                    committed_offset = low  # 커밋된 오프셋이 없거나 잘못된 경우 시작 오프셋 사용
 
-            lag = high - committed_offset
-            self.metrics['kafka'][f'partition_{tp.partition}_lag'] = lag
-            monitoring_logger.info(f"파티션 {tp.partition} - 지연: {lag} (현재: {committed_offset}, 최신: {high})")
+                lag = high - committed_offset
+                metric_key = f"{tp.topic}_partition_{tp.partition}_lag"
+                self.metrics['kafka'][metric_key] = lag
+                
+                monitoring_logger.info(
+                    f"토픽 {tp.topic} 파티션 {tp.partition} - 지연: {lag} "
+                    f"(현재: {committed_offset}, 최신: {high}, 시작: {low})"
+                )
+
+            except KafkaError as ke:
+                if ke.args[0].code() == KafkaError._UNKNOWN_PARTITION:
+                    monitoring_logger.warning(
+                        f"토픽 {tp.topic} 파티션 {tp.partition}이 더 이상 존재하지 않습니다."
+                    )
+                else:
+                    monitoring_logger.error(
+                        f"토픽 {tp.topic} 파티션 {tp.partition} 지연 계산 오류: {ke}"
+                    )
 
     def monitor_system(self):
         """시스템 리소스 모니터링"""
@@ -383,18 +449,18 @@ class SystemMonitor:
         try:
             # CPU 사용률 체크 (80% 이상)
             if self.metrics['system']['cpu_usage'] > 80:
-                self.alert_manager.send_alert('high_cpu_usage', 
+                self.alert_manager.create_alert('high_cpu_usage', 
                     f"CPU 사용률이 {self.metrics['system']['cpu_usage']}%로 높습니다.")
                 
             # 메모리 사용률 체크 (90% 이상)
             if self.metrics['system']['memory_usage'] > 90:
-                self.alert_manager.send_alert('high_memory_usage',
+                self.alert_manager.create_alert('high_memory_usage',
                     f"메모리 사용률이 {self.metrics['system']['memory_usage']}%로 높습니다.")
                 
             # Kafka 지연 체크
             for partition, lag in self.metrics['kafka'].items():
                 if lag > 10000:  # 10000개 이상 지연
-                    self.alert_manager.send_alert('high_kafka_lag',
+                    self.alert_manager.create_alert('high_kafka_lag',
                         f"Kafka {partition}의 지연이 {lag}개로 높습니다.")
                     
         except Exception as e:
