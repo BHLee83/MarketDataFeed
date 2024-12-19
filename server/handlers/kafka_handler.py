@@ -22,7 +22,9 @@ class KafkaHandler:
         # self.temp_storage = []  # 임시 저장소
         self._start_message_sender()
 
-        self._create_topics()  # 토픽 생성 확인
+        # 토픽 초기화
+        self._reset_topics()
+        self._create_topics()  # 토픽 재생성
         
     def _create_producer(self) -> Producer:
         """Kafka Producer 생성"""
@@ -140,3 +142,38 @@ class KafkaHandler:
         """안전한 종료 메서드"""
         self.producer.flush()  # 남은 모든 메시지 전송
         self.producer.close()  # Producer 닫기
+
+    def _reset_topics(self):
+        """모든 토픽 삭제"""
+        try:
+            admin_client = AdminClient({'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS})
+            
+            # 삭제할 토픽 목록
+            topics_to_delete = [
+                Config.KAFKA_TOPICS['RAW_MARKET_DATA'],
+                Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE'],
+                Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY'],
+                Config.KAFKA_TOPICS['PROCESSED_DATA']
+            ]
+            
+            # 토픽 존재 여부 확인 및 삭제
+            existing_topics = admin_client.list_topics(timeout=10).topics
+            topics_to_delete = [topic for topic in topics_to_delete if topic in existing_topics]
+            
+            if topics_to_delete:
+                futures = admin_client.delete_topics(topics_to_delete, operation_timeout=30)
+                
+                # 삭제 완료 대기
+                for topic, future in futures.items():
+                    try:
+                        future.result()  # 삭제 완료 대기
+                        kafka_logger.info(f"토픽 삭제 완료: {topic}")
+                    except Exception as e:
+                        if "UnknownTopicOrPartitionError" not in str(e):
+                            kafka_logger.error(f"토픽 삭제 실패: {topic}, 오류: {e}")
+                
+                # 토픽이 완전히 삭제될 때까지 대기
+                time.sleep(5)
+                
+        except Exception as e:
+            kafka_logger.error(f"토픽 초기화 중 오류 발생: {e}")
