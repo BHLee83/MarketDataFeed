@@ -15,7 +15,8 @@ struct MarketData {
 
 struct PriceData {
   itemCode @0 :Text;
-  currentPrice @1 :Float64;
+  trdTime @1 :Text;
+  currentPrice @2 :Float64;
 }
 """
 

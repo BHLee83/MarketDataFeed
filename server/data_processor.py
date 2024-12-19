@@ -142,7 +142,7 @@ class DataProcessor:
             current_time = time.time()
             processed_data = {
                 'source': str(market_data.source),
-                'timestamp': str(market_data.timestamp),
+                'timestamp': str(next((item.trdTime for item in market_data.content if item.trdTime), market_data.timestamp)),
                 'data_type': str(market_data.dataType),
                 'content': [{
                     'item_code': str(item.itemCode),

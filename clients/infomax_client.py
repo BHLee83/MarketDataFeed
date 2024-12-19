@@ -2,7 +2,8 @@ import win32com.client
 import pythoncom
 import time
 import socket
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 
 import sys
 import os
@@ -24,7 +25,19 @@ class InfomaxClient:
         self.workbook = None
         self.sheet = None
         self.previous_data = {}
+        self.today = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Start a thread to update the date
+        self.date_update_thread = threading.Thread(target=self.update_today_date, daemon=True)
+        self.date_update_thread.start()
     
+    def update_today_date(self):
+        while True:
+            now = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+            if now != self.today:
+                self.today = now
+            time.sleep(3600)  # 1시간 마다 체크
+
     def initialize_excel(self):
         """Excel 초기화 및 설정"""
         try:
@@ -92,6 +105,11 @@ class InfomaxClient:
             updated_data = []
             for idx, row in enumerate(current_data):
                 item_code, trd_time, current_price = row
+
+                # current_price가 0인 경우 제외
+                if current_price == 0:
+                    continue
+
                 row_data = (item_code, trd_time, current_price)
 
                 # 이전 데이터와 비교하여 변경 사항이 있는 경우에만 저장
@@ -99,7 +117,7 @@ class InfomaxClient:
                     updated_data.append({
                         "row": idx,
                         "item_code": item_code,
-                        "trd_time": trd_time,
+                        "trd_time": (self.today + timedelta(days=trd_time)).isoformat(),
                         "current_price": current_price
                     })
                     self.previous_data[idx] = row_data  # 이전 데이터 업데이트
@@ -147,6 +165,7 @@ class InfomaxClient:
             content = message.init('content', len(data['content']))
             for i, item in enumerate(data['content']):
                 content[i].itemCode = str(item['item_code'])
+                content[i].trdTime = str(item['trd_time'])
                 content[i].currentPrice = float(item['current_price'])
             
             # 직렬화
