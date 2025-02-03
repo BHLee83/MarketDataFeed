@@ -67,7 +67,7 @@ class InfomaxClient:
                 raise FileNotFoundError(f"File not found: {self.file_path}")
                 
             self.workbook = self.excel_app.Workbooks.Open(self.file_path)
-            time.sleep(5)  # 워크북 열기 대기
+            time.sleep(10)  # 워크북 열기 대기
             
             self.sheet = self.workbook.Sheets(1)
             print("Excel 초기화 완료!")
@@ -95,8 +95,9 @@ class InfomaxClient:
     def read_excel_data(self):
         """Excel 데이터 읽기"""
         try:
-            last_row = self.sheet.Cells(self.sheet.Rows.Count, 1).End(-4162).Row
-            current_data = self.sheet.Range(f"A4:C{last_row}").Value
+            # last_row = self.sheet.Cells(self.sheet.Rows.Count, 3).End(-4162).Row
+            last_row = 147
+            current_data = self.sheet.Range(f"C4:F{last_row}").Value
 
             if not current_data:  # 데이터가 없는 경우
                 return []
@@ -104,10 +105,24 @@ class InfomaxClient:
             # 변경된 데이터 추출
             updated_data = []
             for idx, row in enumerate(current_data):
-                item_code, trd_time, current_price = row
+                item_code, trd_time, current_price, current_vol = row
 
-                # current_price가 0인 경우 제외
-                if current_price == 0:
+                # 빈칸 처리: 빈 문자열이나 None인 경우 None으로 통일
+                item_code = None if item_code in ['', None] else item_code
+                trd_time = None if trd_time in ['', None] else trd_time
+                current_price = None if current_price in ['', None] else current_price
+                current_vol = None if current_vol in ['', None] else current_vol
+
+                try:
+                    # None이 아닌 경우에만 데이터 타입 변환
+                    trd_time = float(trd_time) if trd_time is not None else None
+                    current_price = float(current_price) if current_price is not None else None
+                    current_vol = float(current_vol) if current_vol is not None else None
+                except (ValueError, TypeError):
+                    continue
+
+                # current_price가 None이거나 0인 경우 제외
+                if current_price is None or current_price == 0:
                     continue
 
                 row_data = (item_code, trd_time, current_price)
@@ -117,8 +132,9 @@ class InfomaxClient:
                     updated_data.append({
                         "row": idx,
                         "item_code": item_code,
-                        "trd_time": (self.today + timedelta(days=trd_time)).isoformat(),
-                        "current_price": current_price
+                        "trd_time": (self.today + timedelta(days=float(trd_time))).isoformat() if trd_time is not None else None,
+                        "current_price": current_price,
+                        "current_vol": current_vol if current_vol is not None else 0
                     })
                     self.previous_data[idx] = row_data  # 이전 데이터 업데이트
 
@@ -203,7 +219,7 @@ class InfomaxClient:
 
 
 if __name__ == "__main__":
-    file_path = r"D:\Public\Infomax_API\AllList_RT.xlsx"
+    file_path = r"D:\Public\Infomax_API\info_rt.xlsx"
     client = InfomaxClient(file_path=file_path)
     try:
         # Excel 초기화 먼저 수행
@@ -219,8 +235,8 @@ if __name__ == "__main__":
                         client.socket.close()  # 기존 소켓 닫기
                         client.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # 새 소켓 생성
                         break  # 내부 루프를 빠져나가 재연결 시도
-                    else:
-                        print("서버로 데이터 전송:", data)
+                    # else:
+                    #     print("서버로 데이터 전송:", data)
         else:
             print("Excel 초기화 실패로 프로그램을 종료합니다.")
     except KeyboardInterrupt:

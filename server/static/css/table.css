@@ -32,3 +32,8 @@
 #tickTable td {
     border: 1px solid #dee2e6;
 } 
+
+#chartControls select {
+    margin: 0 5px; /* 메뉴 간격 조정 */
+    padding: 5px;
+}

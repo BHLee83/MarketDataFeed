@@ -2,6 +2,10 @@ from datetime import datetime, timedelta
 import time
 import json
 import threading
+import numpy as np
+
+import pandas as pd
+
 from config import Config
 from utils.logger import server_logger
 
@@ -13,177 +17,157 @@ class MarketDataProcessor:
         # self.topic_tick = Config.KAFKA_TOPICS['RAW_MARKET_DATA_TICK']
         self.topic_min = Config.KAFKA_TOPICS['RAW_MARKET_DATA_MINUTE']
         self.topic_day = Config.KAFKA_TOPICS['RAW_MARKET_DATA_DAY']
+        self.topic_statistics = Config.KAFKA_TOPICS['STATISTICS_DATA']
         # self.MAX_CHUNK_SIZE = 100
         self.running = True
+
+        # 세팅값
+        self.timeframes = ['1m', '3m', '5m', '10m', '15m', '30m', '1d']
+        self.stat_pair_types = ['spread', 'correlation']    # 페어 계산 종류
+        self.corr_periods = [30, 120]    # 상관계수 계산 기간값 (30일, 120일)
+
+        # 데이터 저장소
+        self.symbol_meta = None # {symbol, country_code, market, name, data_type, instrument_type, source, ...}
+
+        self.symbol_data = {}  # {symbol: {'1m': [], '3m': [], ..., '30m': [], '1d': []}}
+        self.stat_data = {tf: {} for tf in self.timeframes}   # { '1m': {pair: [statistics_data]}, '3m': {}, ..., '30m': {}, '1d': {} }
         
-        # 종목별 데이터 저장소
-        self.symbol_data = {}  # {symbol: {'1m': [], '2m': [], ..., '30m': [], '1d': []}}
-        
-        # 과거 데이터 로드
-        if self.load_historical_price_data():
-            print("과거 일/분 데이터 로드 및 TIMESERIES 데이터 생성 성공")
-            if self.publish_historical_data():  # 과거 데이터 kafka 각 토픽으로 전송
-                self.symbol_data = {}    # 종목별 데이터 저장소 비우기
-                print("TIMESERIES 데이터 KAFKA 전송 완료")
-        
+        self.market_symbols = {}    # {market: [symbol1, symbol2, ...]}
+        self.last_stat_dates = {}   # {tf: last_stat_date}
+
         # 실시간 데이터 처리를 위한 캐시
         self.tick_cache = {}  # {symbol: [tick_data]}
+        self.stat_cache = {tf: {} for tf in self.timeframes}
+
+        # 과거 데이터 로드 및 통계 계산
+        if self.load_hist_price():   # 과거 가격 데이터 로드
+            server_logger.info(f"과거 가격 데이터 로드 완료: {len(self.symbol_data)} 종목")
+            # if self.publish_hist_price():   # MQ 전송
+            #     server_logger.info("과거 가격 데이터 KAFKA 전송 완료")
+            # if self.load_hist_stat_price():   # 과거 통계 데이터 로드
+            #     server_logger.info("과거 통계 데이터 로드 완료")
+            #     if self.publish_stat_price():   # MQ 전송
+            #         server_logger.info("과거 통계값 KAFKA 전송 완료")
+            if self.calculate_latest_pair():  # 최신 데이터에 대한 통계값 계산(일반적으로 전일자)
+                for tf in self.timeframes:  # last_stat_date 값들 미리 로드
+                    self.last_stat_dates[tf] = self.db_manager.get_last_statistics_date(f"statistics_price_{tf}")
+                
+                server_logger.info("최근 통계값 계산 완료")
+                # server_logger.info("과거 데이터 프로세스 완료")
         
         # 처리 스레드 시작
         self.start_processing_threads()
 
-    def load_historical_price_data(self):
-        """과거 일/분 데이터 로드 및 초기화"""
+
+    def load_hist_price(self):
+        """과거 가격 데이터 로드"""
         try:
-            # DB에서 모든 종목의 분/일 데이터 조회
-            historical_data = self.db_manager.load_marketdata_price()
+            # 메타데이터에서 종목코드 목록 조회
+            self.symbol_meta = self.db_manager.load_marketdata_meta()
+            symbols = [item['symbol'] for item in self.symbol_meta]
+            if not symbols:
+                server_logger.info("메타 테이블에 종목코드 데이터가 없습니다.")
+                return False
+            
+            # market별로 심볼 그룹화
+            markets = list(set([item['market'] for item in self.symbol_meta])) # ['EQ', 'IR', 'FX', 'CM', 'ECO', ...]
+            for market in markets:
+                self.market_symbols[market] = [item['symbol'] for item in self.symbol_meta if item['market'] == market]
 
-            # 종목별로 데이터 분류
-            for row in historical_data:
-                symbol = row['code']
-                if symbol not in self.symbol_data:
-                    self.symbol_data[symbol] = {
-                        '1m': [], '2m': [], '3m': [], '5m': [], 
-                        '10m': [], '15m': [], '30m': [], '1d': []
-                    }
-
-                # 일봉 데이터 처리
-                if row['trd_time'] in ('000000', ''):
-                    self.symbol_data[symbol]['1d'].append({
-                        'date': row['trd_date'],
-                        'open': row['open'],
-                        'high': row['high'],
-                        'low': row['low'],
-                        'close': row['close'],
-                        'volume': row['trd_volume']
-                    })
-                else:
-                    # 1분봉 데이터 추가
-                    self.symbol_data[symbol]['1m'].append({
-                        'date': row['trd_date'],
-                        'time': row['trd_time'],
-                        'open': row['open'],
-                        'high': row['high'],
-                        'low': row['low'],
-                        'close': row['close'],
-                        'volume': row['trd_volume']
-                    })
-
-            # 1분봉 데이터로 상위 타임프레임 생성
-            for symbol in self.symbol_data:
-                self.generate_higher_timeframes(symbol)
+            server_logger.info("과거 가격 데이터 로드중...")
+            self.symbol_data = self.db_manager.load_all_marketdata_price(self.timeframes, symbols)
 
             return True
 
         except Exception as e:
-            server_logger.error(f"과거 데이터 로드 중 오류: {e}")
+            server_logger.error(f"가격 데이터 로드 중 오류: {e}")
             return False
-
-    def generate_higher_timeframes(self, symbol):
-        """상위 타임프레임 데이터 생성"""
-        timeframes = {
-            '2m': 2, '3m': 3, '5m': 5, '10m': 10,
-            '15m': 15, '30m': 30
-        }
-
-        one_minute_data = self.symbol_data[symbol]['1m']
         
-        for tf, minutes in timeframes.items():
-            self.symbol_data[symbol][tf] = self.aggregate_timeframe(
-                one_minute_data, minutes
-            )
-
-    def aggregate_timeframe(self, minute_data, interval):
-        """분봉 데이터를 상위 타임프레임으로 집계"""
-        if not minute_data:
-            return []
-
-        aggregated = []
-        processed_times = set()  # 이미 처리된 시간 추적 (날짜와 시간 포함)
-
-        # 첫 1분봉부터 마지막 1분봉까지 interval 단위로 슬라이딩
-        for i in range(0, len(minute_data)):
-            current_candle = minute_data[i]
-            current_time = int(current_candle['time'])
-            current_date = current_candle['date']
-            
-            # 시간을 시와 분으로 분리
-            current_hour = current_time // 100
-            current_minute = current_time % 100
-            
-            # 타겟 시간을 interval 경계로 맞춤
-            target_minute = ((current_minute - 1) // interval + 1) * interval
-            
-            # 시간 처리 (분이 60 이상인 경우 시간 조정)
-            target_hour = current_hour + (target_minute // 60)
-            target_minute = target_minute % 60
-            
-            # 날짜 처리 (시간이 24 이상인 경우 다음날로 조정)
-            target_date = current_date
-            if target_hour >= 24:
-                # YYYYMMDD 형식의 날짜를 datetime으로 변환
-                date_obj = datetime.strptime(current_date, '%Y%m%d')
-                # 하루를 더한 후 다시 문자열로 변환
-                target_date = (date_obj + timedelta(days=1)).strftime('%Y%m%d')
-                target_hour = target_hour % 24
-                
-            target_time = target_hour * 100 + target_minute
-            target_datetime = (target_date, target_time)
-
-            # 이미 처리된 시간대는 건너뜀
-            if target_datetime in processed_times:
-                continue
-
-            # 같은 날짜이고, 현재 시간 이하인 데이터만 선택
-            chunk = [candle for candle in minute_data[i:] 
-                    if (candle['date'] == current_date and int(candle['time']) < target_time) or
-                       (candle['date'] == target_date and int(candle['time']) == target_time)]
-
-            # target_time과 정확히 일치하는 캔들 추가
-            exact_match = next((candle for candle in minute_data[i:] 
-                            if candle['date'] == target_date and 
-                            int(candle['time']) == target_time), None)
-            if exact_match:
-                chunk.append(exact_match)
-            
-            # chunk에 최소한의 데이터가 있다면 캔들 생성
-            if chunk:
-                temp_candle = {
-                    'date': target_date,  # 수정된 날짜 사용
-                    'time': f"{target_time:04d}",
-                    'open': chunk[0]['open'],
-                    'high': max(candle['high'] for candle in chunk),
-                    'low': min(candle['low'] for candle in chunk),
-                    'close': chunk[-1]['close'],
-                    'volume': sum(candle['volume'] for candle in chunk)
-                }
-                aggregated.append(temp_candle)
-                processed_times.add(target_datetime)
-
-        return aggregated
     
-    def publish_historical_data(self):
-        """Publish historical data to Kafka topics"""
+    def load_hist_stat_price(self):
+        """과거 통계 데이터 DB에서 로드"""
+        try:
+            server_logger.info("과거 통계 데이터 로드중...")
+            # 각 타임프레임별로 독립적으로 통계 데이터 로드
+            for tf in self.timeframes:
+                table_name = f'statistics_price_{tf}'
+                # stat_price_data = self.db_manager.load_stat_price(table_name)
+                stat_price_data = self.db_manager.load_stat_price(table_name, '20250110')   # 테스트용
+                self._update_stat_data(tf, stat_price_data)
+            
+            return True
+        except Exception as e:
+            server_logger.error(f"과거 통계 데이터 로드 실패: {e}")
+            return False
+        
+
+    def publish_hist_price(self):
+        """과거 데이터를 Kafka 토픽으로 발행"""
         for symbol, timeframes in self.symbol_data.items():
-            for timeframe, candles in timeframes.items():
-                topic = self.set_topic(timeframe)
+            for tf, candles in timeframes.items():
+                topic = self.set_topic('price', tf)
                 for candle in candles:
                     data = {
                         'symbol': symbol,
                         'data': candle
                     }
-                    if timeframe != '1d':  # 분봉인 경우 타임프레임 정보 추가
-                        data['timeframe'] = timeframe
+                    if tf != '1d':  # 분봉인 경우 타임프레임 정보 추가
+                        data['timeframe'] = tf
                     self.kafka_handler.send_data(topic, data)
 
         return True
+    
+    
+    def publish_stat_price(self):
+        """과거 통계 데이터를 Kafka 토픽으로 발행"""
+        topic = self.set_topic('statistics')
+        for tf, pairs in self.stat_data.items():
+            for pair, stats in pairs.items():
+                for data in stats:
+                    # 스프레드 데이터 전송
+                    spread_data = {
+                        'type': 'spread',
+                        'timeframe': tf,
+                        'symbol': pair,
+                        'market': data['market'],
+                        'symbol1': data['symbol1'],
+                        'symbol2': data['symbol2'],
+                        'value': data['spread'],
+                        'trd_date': data['trd_date'],
+                        'trd_time': data['trd_time']
+                    }
+                    self.kafka_handler.send_data(topic, spread_data)
+                    
+                    # 상관계수 데이터 전송
+                    for period in self.corr_periods:
+                        corr_data = {
+                            'type': 'correlation',
+                            'timeframe': tf,
+                            'symbol': pair,
+                            'market': data['market'],
+                            'symbol1': data['symbol1'],
+                            'symbol2': data['symbol2'],
+                            'period': period,
+                            'value': data[f'corr_{period}'],
+                            'trd_date': data['trd_date'],
+                            'trd_time': data['trd_time']
+                        }
+                        self.kafka_handler.send_data(topic, corr_data)
 
-    def set_topic(self, timeframe):
-        """timeframe별로 topic 네임 설정"""
-        if timeframe == '1d':
-            return self.topic_day
-        elif timeframe.endswith('m'):
-            return self.topic_min
+        return True
+
+
+    def set_topic(self, type, tf=None):
+        """데이터 종류, 타임프레임에 따라 topic 네임 설정"""
+        if type == 'price':
+            if tf == '1d':
+                return self.topic_day
+            elif tf.endswith('m'):
+                return self.topic_min
+
+        elif type == 'statistics':
+            return self.topic_statistics
+
 
     def process_realtime_data(self, market_data):
         """실시간 데이터 처리"""
@@ -194,10 +178,7 @@ class MarketDataProcessor:
             if symbol not in self.tick_cache:
                 self.tick_cache[symbol] = []
             if symbol not in self.symbol_data:
-                self.symbol_data[symbol] = {
-                    '1m': [], '2m': [], '3m': [], '5m': [],
-                    '10m': [], '15m': [], '30m': [], '1d': []
-                }
+                self.symbol_data[symbol] = {tf: [] for tf in self.timeframes}
 
             data = {
                 'timestamp': market_data['timestamp'],
@@ -208,39 +189,78 @@ class MarketDataProcessor:
             # 틱 데이터 캐시에 추가
             self.tick_cache[symbol].append(data)
 
-            # 1분마다 캔들 업데이트
-            self.update_candles(symbol)
+            # 새로운 분봉 생성 조건 확인
+            if self.should_create_new_candle(symbol):
+                self.update_candles(symbol) # 캔들 업데이트
+                self.tick_cache[symbol] = []    # 틱 캐시 초기화
+
+                self.calculate_statistics(symbol)   # 통계값 계산
+
+
+    def should_create_new_candle(self, symbol):
+        """분봉 생성 조건 확인"""
+        if not self.tick_cache or len(self.tick_cache[symbol]) < 2:
+            return False
+        
+        # 분봉 생성 조건: 틱타임 기준 1분마다
+        last_tick = self.tick_cache[symbol][-1]
+        second_last_tick = self.tick_cache[symbol][-2]
+        last_minute = datetime.fromisoformat(last_tick['timestamp']).minute
+        second_last_minute = datetime.fromisoformat(second_last_tick['timestamp']).minute
+        
+        return last_minute != second_last_minute
+    
 
     def update_candles(self, symbol):
         """캔들 데이터 업데이트"""
-        current_time = datetime.now()
+        new_candle = {}
         
-        # 새로운 분봉 생성 조건 확인
-        if self.should_create_new_candle(current_time):
-            ticks = self.tick_cache[symbol]
-            if not ticks:
-                return
+        # 캔들 데이터 채움
+        ticks = self.tick_cache[symbol][:-1]
+        # if ticks:
+        dates = [datetime.fromisoformat(tick['timestamp']).strftime('%Y%m%d') for tick in ticks]
+        times = [datetime.fromisoformat(tick['timestamp']).strftime('%H%M') for tick in ticks]
+        prices = [tick['price'] for tick in ticks]
+        volumes = [tick['volume'] for tick in ticks]
+        new_candle.update({
+            'trd_date': dates[-1],
+            'trd_time': times[-1],
+            'open': prices[0],
+            'high': max(prices),
+            'low': min(prices),
+            'close': prices[-1],
+            'trd_volume': sum(volumes)
+        })
+        # else:
+        #     # 틱 데이터가 없는 경우 직전 캔들의 종가를 사용
+        #     prev_candles = self.symbol_data[symbol]['1m']
+        #     if prev_candles:
+        #         date_obj = datetime.strptime(prev_candles[-1]['trd_date'], '%Y%m%d').date()
+        #         time_obj = datetime.strptime(prev_candles[-1]['trd_time'], '%H%M').time()
+        #         dummy_datetime = datetime.combine(date_obj, time_obj)
+        #         new_datetime = dummy_datetime + timedelta(minutes=1)
+        #         last_price = prev_candles[-1]['close']
+        #         new_candle.update({
+        #             'trd_date': new_datetime.strftime('%Y%m%d'),
+        #             'trd_time': new_datetime.strftime('%H%M'),
+        #             'open': last_price,
+        #             'high': last_price,
+        #             'low': last_price,
+        #             'close': last_price,
+        #             'trd_volume': 0
+        #         })
+        
+        if '1m' not in self.symbol_data[symbol]:
+            self.symbol_data[symbol]['1m'] = []
+        self.symbol_data[symbol]['1m'].append(new_candle)
+        
+        # kafka 전송 및 상위 타임프레임 업데이트
+        data_to_send = {'symbol': symbol, 'timeframe': '1m', 'data': new_candle}
+        self.kafka_handler.send_data(self.topic_min, data_to_send)
+        
+        self.update_higher_timeframes(symbol, new_candle)
+        self.update_daily_candle(symbol, new_candle)
 
-            # 새로운 1분봉 생성
-            new_candle = self.create_candle_from_ticks(ticks)
-            self.symbol_data[symbol]['1m'].append(new_candle)
-            # kafka의 minute topic에 전달
-            data_to_send = {'symbol': symbol, 'timeframe': '1m', 'data': new_candle}
-            print("kafka의 minute topic에 전달: ", data_to_send)
-            self.kafka_handler.send_data(self.topic_min, data_to_send)
-            
-            # 상위 타임프레임 업데이트
-            self.update_higher_timeframes(symbol, new_candle)
-
-            # 일봉 업데이트
-            self.update_daily_candle(symbol, new_candle)
-
-            # 틱 캐시 초기화
-            self.tick_cache[symbol] = []
-
-    def should_create_new_candle(self, current_time):
-        """새로운 캔들을 생성해야 하는지 확인"""
-        return current_time.second == 0
 
     def create_candle_from_ticks(self, ticks):
         """틱 데이터로 캔들 생성"""
@@ -249,8 +269,8 @@ class MarketDataProcessor:
         timestamp = ticks[-1]['timestamp']
 
         return {
-            'date': timestamp[:10],
-            'time': timestamp[11:16].replace(':', ''),
+            'trd_date': timestamp[:10],
+            'trd_time': timestamp[11:16].replace(':', ''),
             'open': prices[0],
             'high': max(prices),
             'low': min(prices),
@@ -258,72 +278,72 @@ class MarketDataProcessor:
             'volume': sum(volumes)
         }
 
+
     def update_higher_timeframes(self, symbol, new_candle):
         """상위 타임프레임 업데이트"""
-        timeframes = {
-            '2m': 2, '3m': 3, '5m': 5, '10m': 10,
-            '15m': 15, '30m': 30
-        }
-
-        for tf, minutes in timeframes.items():
+        for tf in self.timeframes:
+            if tf == '1m' or tf == '1d':
+                continue
+            minutes = int(tf[:-1])
+            if tf not in self.symbol_data[symbol]:
+                self.symbol_data[symbol][tf] = []
             candles = self.symbol_data[symbol][tf]
-            current_time = int(new_candle['time'])
-            current_minutes = (current_time // 100) * 60 + (current_time % 100)
+            current_time = int(new_candle['trd_time'])  # 'HHMM' 형식
             # 완성 시각 계산
-            target_minutes = ((current_minutes - 1) // minutes) * minutes + minutes
-            target_time = (target_minutes // 60) * 100 + (target_minutes % 60)  # 'HHMM' 형식으로 복원
-            if len(candles) == 0 or self.is_new_timeframe(new_candle, candles[-1], minutes):
+            currnet_minutes = (current_time // 100) * 60 + (current_time % 100)
+            target_minutes = ((currnet_minutes - 1) // minutes) * minutes + minutes
+            target_time = f"{target_minutes // 60:02}{target_minutes % 60:02}"  # 'HHMM' 형식
+            last_time = int(candles[-1]['trd_time']) if candles else 0
+            last_minutes = (last_time // 100) * 60 + (last_time % 100)
+            if len(candles) == 0 or (target_minutes > last_minutes):
                 # 새로운 캔들 시작
                 new_candle_copy = new_candle.copy()
-                new_candle_copy['time'] = f"{target_time:04}"  # 완성 시각 설정
+                new_candle_copy['trd_time'] = target_time   # 완성 시각 설정
                 candles.append(new_candle_copy)
-                data = new_candle_copy
             else:
                 # 기존 캔들 업데이트
                 last_candle = candles[-1]
                 last_candle['high'] = max(last_candle['high'], new_candle['high'])
                 last_candle['low'] = min(last_candle['low'], new_candle['low'])
                 last_candle['close'] = new_candle['close']
-                last_candle['volume'] += new_candle['volume']
-                data = last_candle
+                last_candle['trd_volume'] += new_candle['trd_volume']
+                if currnet_minutes == target_minutes:  # 캔들이 완성되었을 때
+                    # kafka의 minute topic에 전달
+                    data_to_send = {'symbol': symbol, 'timeframe': tf, 'data': last_candle}
+                    self.kafka_handler.send_data(self.topic_min, data_to_send)
+                    print("kafka의 minute topic에 전달: ", data_to_send)
 
-            # kafka의 minute topic에 전달
-            data_to_send = {'symbol': symbol, 'timeframe': tf, 'data': data}
-            print("kafka의 minute topic에 전달: ", data_to_send)
-            self.kafka_handler.send_data(self.topic_min, data_to_send)
 
-    def is_new_timeframe(self, new_candle, last_candle, minutes):
-        """새로운 타임프레임 여부 확인"""
-        new_time = int(new_candle['time'])
-        last_time = int(last_candle['time'])
+    # def is_new_timeframe(self, new_time, last_candle, minutes):
+    #     """새로운 타임프레임 여부 확인"""
+    #     last_time = int(last_candle['trd_time'])
 
-        # HHMM 형식에서 타임프레임의 완성 경계 확인
-        new_frame_start = ((new_time - 1) // minutes) * minutes + minutes
-        last_frame_start = ((last_time - 1) // minutes) * minutes + minutes
+    #     # HHMM 형식에서 타임프레임의 완성 경계 확인
+    #     last_frame_start = ((last_time - 1) // minutes) * minutes + minutes
 
-        # 새로운 타임프레임이 시작되었는지 확인
-        return new_frame_start > last_frame_start
+    #     # 새로운 타임프레임이 시작되었는지 확인
+    #     return new_time > last_frame_start
+
 
     def update_daily_candle(self, symbol, new_candle):
         """일봉 데이터 업데이트"""
         daily_candles = self.symbol_data[symbol]['1d']
         
-        if not daily_candles or daily_candles[-1]['date'] != new_candle['date']:
+        if len(daily_candles) == 0 or daily_candles[-1]['trd_date'] != new_candle['trd_date']:
             # 새로운 일봉 시작
             daily_candles.append(new_candle.copy())
-            data = new_candle
+            # kafka의 minute topic에 전달
+            data_to_send = {'symbol': symbol, 'data': daily_candles[-1]}
+            print("kafka의 day topic에 전달: ", data_to_send)
+            self.kafka_handler.send_data(self.topic_day, data_to_send)
         else:
             # 기존 일봉 업데이트
             last_candle = daily_candles[-1]
             last_candle['high'] = max(last_candle['high'], new_candle['high'])
             last_candle['low'] = min(last_candle['low'], new_candle['low'])
             last_candle['close'] = new_candle['close']
-            last_candle['volume'] += new_candle['volume']
-            data = last_candle
-        # kafka의 minute topic에 전달
-        data_to_send = {'symbol': symbol, 'data': data}
-        print("kafka의 day topic에 전달: ", data_to_send)
-        self.kafka_handler.send_data(self.topic_day, data_to_send)
+            last_candle['trd_volume'] += new_candle['trd_volume']
+
 
     def get_chart_data(self, symbol, timeframe):
         """차트 데이터 조회"""
@@ -331,17 +351,19 @@ class MarketDataProcessor:
             return self.symbol_data[symbol][timeframe]
         return []
 
+
     def start_processing_threads(self):
         """데이터 처리 스레드 시작"""
         self.threads = {
-            'time_series': threading.Thread(target=self.process_time_series, daemon=True)
-            # 'statistics': threading.Thread(target=self.process_statistics, daemon=True),
+            'time_series': threading.Thread(target=self.process_time_series, daemon=True),
+            # 'statistics': threading.Thread(target=self.process_statistics, daemon=True)
             # 'chart_data': threading.Thread(target=self.process_chart_data, daemon=True),
             # 'publish_processed_data': threading.Thread(target=self.publish_processed_data, daemon=True)
         }
         
         for thread in self.threads.values():
             thread.start()
+
 
     def stop(self):
         """데이터 처리 스레드 종료"""
@@ -351,165 +373,258 @@ class MarketDataProcessor:
         for thread in self.threads.values():
             thread.join()
 
+
     def process_time_series(self):
         """시계열 데이터 처리"""
         while self.running:
             try:
-                messages = self.consumer.consume(num_messages=100, timeout=1.0)
+                messages = self.consumer.consume(timeout=1.0)
                 for msg in messages:
                     if msg.error():
                         continue
                         
                     market_data = json.loads(msg.value().decode('utf-8'))
-                    # self.update_time_series(market_data)
                     self.process_realtime_data(market_data)
                     
-                # 주기적으로 캐시 데이터를 DB에 저장
-                # self.store_time_series_data()
-                    
             except Exception as e:
-                print(f"시계열 데이터 처리 오류: {e}")
+                server_logger.error(f"시계열 데이터 처리 오류: {e}")
                 time.sleep(1)
 
-    # def update_time_series(self, market_data):
-    #     """시계열 데이터 업데이트"""
-    #     timestamp = datetime.fromisoformat(market_data['timestamp'])
-        
-    #     # 체결 데이터 업데이트
-    #     self.time_series_cache['tick'].append(market_data)
-        
-    #     # 분봉 데이터 업데이트
-    #     minute_key = timestamp.strftime('%Y%m%d%H%M')
-    #     if minute_key not in self.time_series_cache['minute']:
-    #         self.time_series_cache['minute'][minute_key] = []
-    #     self.time_series_cache['minute'][minute_key].append(market_data)
-        
-    #     # 일봉 데이터 업데이트
-    #     daily_key = timestamp.strftime('%Y%m%d')
-    #     if daily_key not in self.time_series_cache['daily']:
-    #         self.time_series_cache['daily'][daily_key] = []
-    #     self.time_series_cache['daily'][daily_key].append(market_data)
 
-    #     # 분봉 데이터 생성
-    #     self.generate_minute_bars(market_data)
+    def calculate_statistics(self, symbol):
+        """통계 계산"""
+        self.calculate_pair(symbol)
+        # self.calculate_volume_profile()
+        # self.calculate_price_levels()
+        # self.calculate_moving_averages()
 
-    # def generate_minute_bars(self, market_data):
-    #     """1분봉~30분봉 데이터 생성"""
-    #     timestamp = datetime.fromisoformat(market_data['timestamp'])
-    #     minute = timestamp.minute
 
-    #     for interval in range(1, 31):
-    #         if minute % interval == 0:
-    #             key = timestamp.strftime('%Y%m%d%H') + f"{minute // interval * interval:02d}"
-    #             if key not in self.minute_bars_cache[interval]:
-    #                 self.minute_bars_cache[interval][key] = []
-    #             self.minute_bars_cache[interval][key].append(market_data)
+    def _correlation(self, x, y):
+        """두 시계열 데이터의 상관계수 계산 (최적화 버전)"""
+        try:
+            if len(x) != len(y):
+                return 0
+            
+            n = len(x)
+            if n < 2:
+                return 0
+            
+            x = np.array(x, dtype=np.float64)
+            y = np.array(y, dtype=np.float64)
+            
+            # 평균 계산
+            mean_x = x.mean()
+            mean_y = y.mean()
+            
+            # 편차 계산
+            xm = x - mean_x
+            ym = y - mean_y
+            
+            # 공분산과 표준편차 계산 (벡터화 연산)
+            covariance = (xm * ym).sum()
+            std_x = np.sqrt((xm ** 2).sum())
+            std_y = np.sqrt((ym ** 2).sum())
+            
+            if std_x == 0 or std_y == 0:
+                return 0
+            
+            # 피어슨 상관계수 계산
+            correlation = covariance / (std_x * std_y)
+            
+            return max(min(correlation, 1.0), -1.0)
+            
+        except Exception as e:
+            server_logger.error(f"상관계수 계산 중 오류 발생: {e}")
+            return 0
+
+
+    def _calculate_pair_stat(self, market, symbol_i, symbol_j, tf, last_stat_date=None, last_stat_time=None):
+        """두 시계열간 통계 데이터 계산"""
+        data_i = self.symbol_data.get(symbol_i, {}).get(tf)
+        data_j = self.symbol_data.get(symbol_j, {}).get(tf)
+        if not data_i or not data_j:
+            return []
+
+        # 두 심볼의 공통 시계열 찾기
+        if tf == '1d':
+            dates_i = {d['trd_date']: idx for idx, d in enumerate(data_i)}
+            dates_j = {d['trd_date']: idx for idx, d in enumerate(data_j)}
+            common_dates = sorted(set(dates_i.keys()) & set(dates_j.keys()))
+            calc_dates = [d for d in common_dates if d > last_stat_date] if last_stat_date else common_dates
+        else:
+            dates_i = {(d['trd_date'], d['trd_time']): idx for idx, d in enumerate(data_i)}
+            dates_j = {(d['trd_date'], d['trd_time']): idx for idx, d in enumerate(data_j)}
+            common_dates = sorted(set(dates_i.keys()) & set(dates_j.keys()))
+            if last_stat_time:
+                calc_dates = [
+                    d for d in common_dates 
+                    if (d[0] > last_stat_date) or (d[0] == last_stat_date and d[1] > last_stat_time)
+                ] if last_stat_date else common_dates
+            else:
+                calc_dates = [
+                    d for d in common_dates 
+                    if d[0] > last_stat_date
+                ] if last_stat_date else common_dates
+
+        if not calc_dates:
+            return []
+
+        market_results = []
+        for type in self.stat_pair_types:
+            for calc_date in calc_dates:
+                idx_i = dates_i[calc_date]
+                idx_j = dates_j[calc_date]
+
+                # 기본 데이터 준비
+                common = {
+                    'trd_date': calc_date[0] if tf != '1d' else calc_date,
+                    'trd_time': calc_date[1] if tf != '1d' else ' ',
+                    'market': market,
+                    'symbol1': symbol_i,
+                    'symbol2': symbol_j,
+                }
+
+                # 스프레드 계산 및 저장
+                if type == 'spread':
+                    value = data_i[idx_i]['close'] - data_j[idx_j]['close']
+                    market_results.append({
+                        **common,
+                        'type': type,
+                        'value1': value,
+                        'value2': None,
+                        'value3': None
+                    })
+
+                elif type == 'correlation':
+                    # 상관계수 계산 및 저장
+                    for period in self.corr_periods:
+                        if idx_i >= period and idx_j >= period:
+                            close_i = [data_i[k]['close'] for k in range(idx_i - period + 1, idx_i + 1)]
+                            close_j = [data_j[k]['close'] for k in range(idx_j - period + 1, idx_j + 1)]
+                            value = self._correlation(close_i, close_j)
+                            
+                            market_results.append({
+                                **common,
+                                'type': f'corr_{period}',
+                                'value1': value,
+                                'value2': None,
+                                'value3': None
+                            })
+
+        return market_results
+    
+
+    def calculate_pair(self, updated_symbol):
+        """실시간 데이터에 대한 통계값 계산 (변경된 심볼 기준)"""
+        try:
+            # updated_symbol이 속한 마켓 찾기
+            target_market = None
+            for market, symbols in self.market_symbols.items():
+                if updated_symbol in symbols:
+                    target_market = market
+                    break
+            
+            if not target_market:
+                server_logger.warning(f"Symbol not found in any market: {updated_symbol}")
+                return
+
+            topic = self.set_topic('statistics')
+
+            for tf in self.timeframes:
+                if tf == '1d':
+                    continue
+
+                market_results = []
+                last_stat_date = self.last_stat_dates[tf]
                 
-    def process_statistics(self):
-        """통계 데이터 처리"""
-        while self.running:
-            try:
-                self.calculate_volume_profile()
-                self.calculate_price_levels()
-                self.calculate_moving_averages()
-                time.sleep(1)  # 1초마다 통계 업데이트
+                # 해당 마켓에 대해서만 처리
+                symbols = self.market_symbols[target_market]
+                symbol_pairs = []
+                symbol_idx = symbols.index(updated_symbol)
                 
-            except Exception as e:
-                print(f"통계 데이터 처리 오류: {e}")
-                time.sleep(1)
-                
-    def process_chart_data(self):
-        """차트 데이터 생성"""
-        while self.running:
-            try:
-                self.generate_chart_data()
-                time.sleep(0.5)  # 0.5초마다 차트 데이터 업데이트
-                
-            except Exception as e:
-                print(f"차트 데이터 처리 오류: {e}")
-                time.sleep(1)
-                
-    # def _chunk_data(self, data):
-    #     """대용량 데이터를 작은 청크로 분할"""
-    #     for i in range(0, len(data), self.MAX_CHUNK_SIZE):
-    #         yield data[i:i + self.MAX_CHUNK_SIZE]
+                # 앞쪽 심볼들과의 페어
+                symbol_pairs.extend([(symbols[i], updated_symbol) for i in range(symbol_idx)])
+                # 뒤쪽 심볼들과의 페어
+                symbol_pairs.extend([(updated_symbol, symbols[i]) for i in range(symbol_idx + 1, len(symbols))])
 
-    # def publish_processed_data(self):
-    #     """생성된 실시간 데이터를 Kafka의 각 토픽에 발행"""
-    #     while self.running:
-    #         try:
-    #             # 시계열 데이터 발행 (청크 단위)
-    #             if self.time_series_cache['tick']:
-    #                 for tick_chunk in self._chunk_data(self.time_series_cache['tick']):
-    #                     processed_tick_data = {
-    #                         'type': 'tick_data',
-    #                         'data': tick_chunk
-    #                     }
-    #                     self.kafka_handler.send_data(
-    #                         topic=self.topic_tick, 
-    #                         data=processed_tick_data
-    #                     )
-    #                 # 발행 후 캐시 초기화
-    #                 self.time_series_cache['tick'] = []
+                # 페어별 통계 계산
+                for symbol_i, symbol_j in symbol_pairs:
+                    pair = f"{symbol_i}-{symbol_j}"
+                    last_stat_time = None
 
-    #             # 분봉 데이터 발행 (청크 단위)
-    #             for minute_key, minute_data in list(self.time_series_cache['minute'].items()):
-    #                 for minute_chunk in self._chunk_data(minute_data):
-    #                     processed_minute_data = {
-    #                         'type': 'minute_data',
-    #                         'key': minute_key,
-    #                         'data': minute_chunk
-    #                     }
-    #                     self.kafka_handler.send_data(
-    #                         topic=self.topic, 
-    #                         data=processed_minute_data
-    #                     )
-    #                 # 발행 후 해당 분봉 데이터 삭제
-    #                 del self.time_series_cache['minute'][minute_key]
+                    if pair in self.stat_data[tf].keys():
+                        last_record = max(self.stat_data[tf][pair], key=lambda x: (x.get('trd_date', ''), x.get('trd_time', '')))
+                        last_stat_date, last_stat_time = last_record['trd_date'], last_record['trd_time']
 
-    #             # 통계 데이터 발행 (청크 단위)
-    #             if self.statistics_cache:
-    #                 processed_stats_data = {
-    #                     'type': 'statistics_data',
-    #                     'data': self.statistics_cache
-    #                 }
-    #                 self.kafka_handler.send_data(
-    #                     topic=self.topic, 
-    #                     data=processed_stats_data
-    #                 )
+                    market_results_pair = self._calculate_pair_stat(target_market, symbol_i, symbol_j, tf, last_stat_date, last_stat_time)
+                    if market_results_pair:
+                        market_results.extend(market_results_pair)
+                        # Kafka 전송을 배치로 처리
+                        processed_data = [{
+                            'timeframe': tf,
+                            **data
+                        } for data in market_results_pair]
+                        self.kafka_handler.send_batch(topic, processed_data)
+                        print(f"통계값 계산 및 전송: {processed_data}")
 
-    #             # 차트 데이터 발행 (필요시 청크 처리)
-    #             if self.chart_cache:
-    #                 processed_chart_data = {
-    #                     'type': 'chart_data',
-    #                     'data': self.chart_cache
-    #                 }
-    #                 self.kafka_handler.send_data(
-    #                     topic=self.topic, 
-    #                     data=processed_chart_data
-    #                 )
+                # 캐시 업데이트를 배치로 처리
+                if market_results:
+                    self._update_stat_data(tf, market_results)
+                    self._update_stat_cache(tf, market_results)
 
-    #             # 일정 간격으로 발행
-    #             time.sleep(5)  # 5초마다 처리된 데이터 발행
+        except Exception as e:
+            server_logger.error(f"실시간 통계값 계산 중 오류: {e}")
 
-    #         except Exception as e:
-    #             server_logger.error(f"처리된 데이터 발행 오류: {e}")
-    #             time.sleep(1)
 
-    def store_time_series_data(self):
-        """시계열 데이터 DB 저장"""
-        current_time = datetime.now()
-        
-        # 전일 데이터 저장 (새벽 5시)
-        if current_time.hour == 5 and current_time.minute == 0:
-            previous_day = (current_time - timedelta(days=1)).strftime('%Y%m%d')
-            if previous_day in self.time_series_cache['daily']:
-                self.db_manager.store_daily_data(
-                    self.time_series_cache['daily'][previous_day]
-                )
-                del self.time_series_cache['daily'][previous_day]
+    def calculate_latest_pair(self):
+        """DB기준 최신 마켓데이터에 대한 통계값 계산"""
+        try:
+            for tf in self.timeframes:
+                last_stat_date = self.db_manager.get_last_statistics_date(f"statistics_price_{tf}")
+                if not last_stat_date:
+                    last_stat_date = "19000101"
 
-    # 아직 구현되지 않은 메서드들 (플레이스홀더)
+                for market, symbols in self.market_symbols.items():
+                    market_results = []
+                    for i, symbol_i in enumerate(symbols):
+                        for j, symbol_j in enumerate(symbols[i+1:], i+1):
+                            market_results_pair = self._calculate_pair_stat(market, symbol_i, symbol_j, tf, last_stat_date)
+                            if market_results_pair:
+                                market_results.extend(market_results_pair)
+                                # DB 저장
+                                self.db_manager.save_statistics_data(f"statistics_price_{tf}", market_results_pair)
+
+                if market_results:
+                    self._update_stat_data(tf, market_results)
+                    self._update_stat_cache(tf, market_results)
+
+            return True
+        except Exception as e:
+            server_logger.error(f"과거 통계값 계산 중 오류: {e}")
+            return False
+
+
+    def _update_stat_cache(self, tf, data):
+        """통계 캐시 업데이트"""
+        for item in data:
+            pair_key = f"{item['symbol1']}-{item['symbol2']}"
+            if pair_key not in self.stat_cache[tf]:
+                self.stat_cache[tf][pair_key] = []
+            
+            filtered_data = {key: value for key, value in item.items() if key not in ['id', 'created_at']}
+            self.stat_cache[tf][pair_key].append(filtered_data)
+
+    def _update_stat_data(self, tf, data):
+        """통계 데이터 업데이트"""
+        for item in data:
+            pair_key = f"{item['symbol1']}-{item['symbol2']}"
+            if pair_key not in self.stat_data[tf]:
+                self.stat_data[tf][pair_key] = []
+            
+            filtered_data = {key: value for key, value in item.items() if key not in ['id', 'created_at']}
+            self.stat_data[tf][pair_key].append(filtered_data)
+
+
     def calculate_volume_profile(self):
         """거래량 프로파일 계산"""
         pass

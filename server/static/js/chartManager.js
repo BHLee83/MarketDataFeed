@@ -221,38 +221,65 @@ class ChartManager {
             const marketData = item.data;
             let timestamp;
             
-            // 날짜와 시간 형식 처리
-            if (marketData.date.length === 8) {  // YYYYMMDD 형식
-                const year = marketData.date.substring(0, 4);
-                const month = marketData.date.substring(4, 6);
-                const day = marketData.date.substring(6, 8);
+            try {
+                // 날짜 형식에서 구분자 제거
+                const cleanDate = marketData.trd_date.replace(/-/g, '');
                 
-                // 시간이 있는 경우 (분봉)
-                if (marketData.time) {
-                    const hour = marketData.time.substring(0, 2);
-                    const minute = marketData.time.substring(2, 4);
-                    timestamp = new Date(`${year}-${month}-${day}T${hour}:${minute}:00`);
-                } else {  // 시간이 없는 경우 (일봉)
-                    timestamp = new Date(`${year}-${month}-${day}`);
+                // 날짜 형식 검증
+                if (cleanDate.length === 8 && /^\d{8}$/.test(cleanDate)) {  // 유효한 8자리 숫자인지 확인
+                    const year = parseInt(cleanDate.substring(0, 4));
+                    const month = parseInt(cleanDate.substring(4, 6));
+                    const day = parseInt(cleanDate.substring(6, 8));
+                    
+                    // ISO 형식의 날짜 문자열 생성
+                    const dateStr = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+                    const dateObj = new Date(dateStr);
+                    
+                    // 유효한 날짜인지 확인
+                    if (isNaN(dateObj.getTime())) {
+                        console.error('Invalid date:', marketData.trd_date);
+                        return null;
+                    }
+                    
+                    // 시간이 있는 경우 (분봉)
+                    if (marketData.trd_time) {
+                        const hour = marketData.trd_time.substring(0, 2);
+                        const minute = marketData.trd_time.substring(2, 4);
+                        timestamp = new Date(`${dateStr}T${hour}:${minute}:00`);
+                    } else {  // 시간이 없는 경우 (일봉)
+                        timestamp = dateObj;
+                    }
+                } else {
+                    console.error('Unsupported date format:', marketData.trd_date);
+                    return null;
                 }
-            } else {
-                console.error('Unsupported date format:', marketData.date);
+
+                return {
+                    date: timestamp,
+                    open: marketData.open,
+                    high: marketData.high,
+                    low: marketData.low,
+                    close: marketData.close,
+                    volume: marketData.volume
+                };
+            } catch (error) {
+                console.error('Error processing market data:', error);
                 return null;
             }
-
-            return {
-                date: timestamp,
-                open: marketData.open,
-                high: marketData.high,
-                low: marketData.low,
-                close: marketData.close,
-                volume: marketData.volume
-            };
         }).filter(item => item !== null);  // 잘못된 데이터 필터링
 
-        console.log('Processed market data:', processedData);
+        // 동일한 timestamp를 가진 데이터 중 마지막 데이터만 유지
+        const uniqueData = {};
+        processedData.forEach(item => {
+            const timeKey = item.date.getTime();
+            uniqueData[timeKey] = item;
+        });
 
-        return processedData;
+        // 객체를 다시 배열로 변환하고 시간순으로 정렬
+        const finalData = Object.values(uniqueData).sort((a, b) => a.date - b.date);
+        console.log('Processed market data:', finalData);
+
+        return finalData;
     }
 
     renderChart(rawData) {

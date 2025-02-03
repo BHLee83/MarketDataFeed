@@ -24,9 +24,9 @@ class SHiIndiClient(QMainWindow):
         self.code_list = [] # 전체 종목 리스트
         self.codes = [] # self.code_list에서 '단축코드'만 추출
         self.cnt_daily_rcv = 0
-        self.cnt_min_rcv = 0
+        self.cnt_min_rcv = {'1m': 0, '3m': 0, '5m': 0, '10m': 0, '15m': 0, '30m': 0}
         self.data_daily = []    # 일봉 데이터
-        self.data_min = []   # 분봉 데이터
+        self.data_min = {'1m': [], '3m': [], '5m': [], '10m': [], '15m': [], '30m': []}   # 분봉 데이터
         self.rqidD = {}
         self.strToday = datetime.today().strftime('%Y%m%d')
         self.strDtTarget = self.strToday
@@ -118,10 +118,7 @@ class SHiIndiClient(QMainWindow):
 
     def set_tr_chart_id(self, tr):
         if tr['구분'] == 'fut_mst':
-            if tr['종목명'].endswith('연결'):
-                tr_chart_id = 'TR_FNCHART'   # 주식 연결 선물
-            else:
-                tr_chart_id = 'TR_FCHART'   # 주식 선물
+            tr_chart_id = 'TR_FCHART'   # 주식 선물
         elif tr['구분'] == 'cfut_mst':
             if tr['종목명'].endswith('연결'):
                 tr_chart_id = 'TR_CFNCHART'   # 상품 연결 선물
@@ -163,8 +160,8 @@ class SHiIndiClient(QMainWindow):
     def rqMinute(self):
         '분봉 데이터 요청'
         dataType = '1'
-        timeIntvl = ['1']   # 1분봉만 수신
-        for i in timeIntvl:
+        timeIntvls = ['1', '3', '5', '10', '15', '30']   # 1분, 3분, 5분, 10분, 15분, 30분
+        for i in timeIntvls:
             for j in self.code_list:
                 tr_chart_id = self.set_tr_chart_id(j)
                 ret = self.IndiTR.dynamicCall("SetQueryName(QString)", tr_chart_id)
@@ -175,7 +172,7 @@ class SHiIndiClient(QMainWindow):
                 ret = self.IndiTR.dynamicCall("SetSingleData(int, QString)", 4, self.strDtTarget) # YYYYMMDD (분 데이터 요청시: "99999999")
                 ret = self.IndiTR.dynamicCall("SetSingleData(int, QString)", 5, '9999')  # 조회갯수 (1 - 9999)
                 rqid = self.IndiTR.dynamicCall("RequestData()")
-                self.rqidD[rqid] =  tr_chart_id + '+' + dataType + '+' + j['단축코드']
+                self.rqidD[rqid] = tr_chart_id + '+' + i + '+' + j['단축코드']
                 self.event_loop.exec_()
 
     def procList(self, name):
@@ -276,7 +273,7 @@ class SHiIndiClient(QMainWindow):
             self.codes = [code['단축코드'] for code in self.code_list]
             self.mst_ready = True
 
-    def procDaily(self, strTRChart, code):
+    def procDaily(self, strTRChart, dataType, code):
         self.cnt_daily_rcv += 1
         cnt = self.IndiTR.dynamicCall("GetMultiRowCount()")
         print(f"일 데이터 수신 중: {code}, {cnt}")
@@ -284,8 +281,8 @@ class SHiIndiClient(QMainWindow):
             if any([strTRChart == 'TR_FCHART', strTRChart == 'TR_FNCHART', strTRChart == 'TR_CFCHART', strTRChart == 'TR_CFNCHART']):
                 for i in range(cnt):
                     data = {}
+                    data['symbol'] = code
                     data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
-                    data['code'] = code
                     data['trd_time'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)    # 체결시간
                     data['open'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)    # 시가
                     data['high'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)    # 고가
@@ -317,52 +314,52 @@ class SHiIndiClient(QMainWindow):
             #             self.data_daily.append(data)
         if self.cnt_daily_rcv == len(self.code_list):
             print("일 데이터 수신 완료")
-            self.insert_to_db(self.data_daily)
+            self.insert_to_db(f'1{dataType}', self.data_daily)
 
-    def procMin(self, strTRChart, code):
-        self.cnt_min_rcv += 1
+    def procMin(self, strTRChart, dataType, code):
+        self.cnt_min_rcv[f'{dataType}m'] += 1
         cnt = self.IndiTR.dynamicCall("GetMultiRowCount()")
         if cnt > 0:
-            print(f"분 데이터 수신 중: {code}, {cnt}")
+            print(f"{dataType}분 데이터 수신 중: {code}, {cnt}")
             if any([strTRChart == 'TR_FCHART', strTRChart == 'TR_FNCHART', strTRChart == 'TR_CFCHART', strTRChart == 'TR_CFNCHART']):
                 for i in range(cnt):
                     data = {}
                     data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
-                    data['code'] = code
-                    data['trd_time'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)    # 체결시간
-                    data['open'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)    # 시가
-                    data['high'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)    # 고가
-                    data['low'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)     # 저가
                     data['close'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 5)   # 종가
-                    data['open_int'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 6)   # 미결제약정수량
-                    data['theo_prc'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 7)     # 이론가
-                    data['under_lvl'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 8)     # 기초자산지수
-                    data['trd_volume'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 9)     # 단위거래량
-                    data['trd_value'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 10)     # 단위거래대금
-                    if float(data['close']) != 0:
-                        self.data_min.append(data)
+                    if data['trd_date'] == self.strDtTarget and float(data['close']) != 0:
+                        data['symbol'] = code
+                        data['trd_time'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)    # 체결시간
+                        data['open'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)    # 시가
+                        data['high'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)    # 고가
+                        data['low'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)     # 저가
+                        data['open_int'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 6)   # 미결제약정수량
+                        data['theo_prc'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 7)     # 이론가
+                        data['under_lvl'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 8)     # 기초자산지수
+                        data['trd_volume'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 9)     # 단위거래량
+                        data['trd_value'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 10)     # 단위거래대금
+                        self.data_min[f'{dataType}m'].append(data)
             # elif strTRChart == 'TR_ICHART' or strTRChart == 'TR_INCHART' or strTRChart == 'TR_CMCHART':
-                for i in range(cnt):
-                    data = {}
-                    data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
-                    data['code'] = code
-                    data['trd_time'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)    # 체결시간
-                    data['open'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)    # 시가
-                    data['high'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)    # 고가
-                    data['low'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)     # 저가
-                    data['close'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 5)   # 현재가
-                    data['open_int'] = None
-                    data['theo_prc'] = None
-                    data['under_lvl'] = None
-                    data['trd_volume'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 6)     # 단위거래량
-                    data['trd_value'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 7)     # 단위거래대금
-                    if float(data['close']) != 0:
-                        self.data_min.append(data)
-        if self.cnt_min_rcv == len(self.code_list):
-            print("분 데이터 수신 완료")
-            self.insert_to_db(self.data_min)
+            #     for i in range(cnt):
+            #         data = {}
+            #         data['trd_date'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)    # 일자
+            #         data['code'] = code
+            #         data['trd_time'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)    # 체결시간
+            #         data['open'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)    # 시가
+            #         data['high'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)    # 고가
+            #         data['low'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)     # 저가
+            #         data['close'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 5)   # 현재가
+            #         data['open_int'] = None
+            #         data['theo_prc'] = None
+            #         data['under_lvl'] = None
+            #         data['trd_volume'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 6)     # 단위거래량
+            #         data['trd_value'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 7)     # 단위거래대금
+            #         if float(data['close']) != 0:
+            #             self.data_min.append(data)
+        if self.cnt_min_rcv[f'{dataType}m'] == len(self.code_list):
+            print(f"{dataType}분 데이터 수신 완료")
+            self.insert_to_db(f'{dataType}m', self.data_min[f'{dataType}m'])
 
-    def insert_to_db(self, data):
+    def insert_to_db(self, dataType, data):
         if len(data) == 0:
             return
         
@@ -370,10 +367,10 @@ class SHiIndiClient(QMainWindow):
         columns = data[0].keys()
         placeholders = ', '.join([f':{col}' for col in columns])
         query = f"""
-        MERGE INTO market_data_price target
+        MERGE INTO marketdata_price_{dataType} target
         USING (SELECT {', '.join([f':{col} AS {col}' for col in columns])} FROM dual) source
-        ON (target.trd_date = source.trd_date AND
-            target.code = source.code AND
+        ON (target.symbol = source.symbol AND
+            target.trd_date = source.trd_date AND
             target.trd_time = source.trd_time)
         WHEN MATCHED THEN
             UPDATE SET
@@ -415,9 +412,9 @@ class SHiIndiClient(QMainWindow):
             dataType = split_name[1]
             code = split_name[2]
             if dataType == 'D':   # 일봉
-                self.procDaily(strTRChart, code)
-            elif dataType == '1': # 분봉
-                self.procMin(strTRChart, code)
+                self.procDaily(strTRChart, dataType, code)
+            else:   # 분봉
+                self.procMin(strTRChart, dataType, code)
         
         self.rqidD.__delitem__(rqid)
         self.event_loop.exit()

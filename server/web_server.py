@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, KafkaError
 import json
 import asyncio
 from typing import Dict, List
@@ -14,7 +14,9 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from database.db_manager import DatabaseManager
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
+from memory_store import MemoryStore
 
 app = FastAPI()
 
@@ -134,14 +136,19 @@ app.mount("/static", StaticFiles(directory="server/static"), name="static")
 
 @app.get("/")
 async def read_root():
-    return FileResponse("static/index.html")
+    return FileResponse("server/static/index.html")
 
 @app.get("/api/symbols")
 async def get_symbols():
-        db_manager = DatabaseManager()
-        meta = db_manager.load_marketdata_meta()
-        symbols = [i['symbol'] for i in meta]
+    try:
+        # 메모리 저장소에서 메타데이터 사용
+        symbols = [item['symbol'] for item in memory_store.meta_data]
+        if not symbols:  # 메모리에 없는 경우 DB에서 로드
+            meta = await db_manager.load_marketdata_meta_async()  # await 추가
+            symbols = [item['symbol'] for item in meta]
         return {"symbols": symbols}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/ws/chart/{timeframe}/{symbol}")
 async def websocket_endpoint(websocket: WebSocket, timeframe: str, symbol: str, interval: str = None):
@@ -194,6 +201,160 @@ async def websocket_endpoint(websocket: WebSocket, timeframe: str, symbol: str, 
     finally:
         if websocket in data_queues:
             del data_queues[websocket]
+
+# DB 매니저 인스턴스
+db_manager = DatabaseManager()
+memory_store = MemoryStore()
+
+@app.on_event("startup")
+async def startup_event():
+    """앱 시작 시 초기화"""
+    await db_manager.initialize()  # DB 매니저 초기화
+    await memory_store.initialize(db_manager)  # 메모리 저장소 초기화
+
+def _create_consumer():
+    """Kafka Consumer 생성"""
+    return Consumer({
+        'bootstrap.servers': Config.KAFKA_BOOTSTRAP_SERVERS,
+        'group.id': f'web_consumer_{uuid.uuid4()}',
+        'auto.offset.reset': 'latest',  # 실시간 데이터만 구독
+        'enable.auto.commit': True
+    })
+
+@app.get("/api/loading-status")
+async def get_loading_status():
+    """데이터 로딩 상태 확인 API"""
+    try:
+        return JSONResponse(memory_store.get_loading_status())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/statistics/{data_type}/{timeframe}/{market}")
+async def get_statistics(data_type: str, timeframe: str, market: str = None, key: str = None, start: str = None, end: str = None):
+    """저장소에서 통계 데이터 조회"""
+    try:
+        if memory_store.loading_status[timeframe]:  # 메모리에 데이터 로딩 중인 경우
+            data = memory_store.get_statistics_data(data_type, timeframe, market, key, start, end)  # 메모리에서 통계 데이터 가져오고
+        if data is None:    # 메모리에 없는 경우 DB 확인
+            table_name = f"statistics_price_{timeframe}"
+            symbol1, symbol2 = key.split('-') if key and '-' in key else (None, None)
+            data = await db_manager.load_statistics_data_async(table_name, data_type, market, symbol1, symbol2, start, end)
+            memory_store._store_statistics_data(timeframe, data)
+            data = memory_store.get_statistics_data(data_type, timeframe, market, key, start, end)
+            
+        # if data is None:
+        #     raise HTTPException(status_code=404, detail="Data not found")
+            
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/memory-store-status")
+async def get_admin_memory_store_status():
+    """관리자용 메모리 저장소 상태 확인"""
+    status = {
+        'loading_status': memory_store.get_loading_status(),
+        'statistics_data_count': {
+            tf: {
+                market: len(data) 
+                for market, data in memory_store.statistics_data[tf].items()
+            }
+            for tf in memory_store.loading_status.keys()
+        },
+        'price_data_count': {
+            tf: len(memory_store.price_data[tf])
+            for tf in memory_store.loading_status.keys()
+        },
+        'memory_usage': {
+            'statistics': sys.getsizeof(memory_store.statistics_data),
+            'price': sys.getsizeof(memory_store.price_data)
+        }
+    }
+    return status
+
+@app.get("/api/last-date/{timeframe}")
+async def getLastDate(timeframe: str):
+    table_name = f"marketdata_price_{timeframe}"
+    data = db_manager.get_last_statistics_date(table_name)
+
+    return data
+
+@app.websocket("/ws/price/{timeframe}/{symbol}")
+async def price_websocket_endpoint(websocket: WebSocket, timeframe: str, symbol: str):
+    """가격 데이터 웹소켓 엔드포인트"""
+    await websocket.accept()
+    try:
+        # 초기 데이터 전송 (메모리 저장소에서)
+        market = next((item['market'] for item in memory_store.meta_data if item['symbol'] == symbol), None)
+        if market and memory_store.loading_status[timeframe]:
+            initial_data = memory_store.get_price_data(timeframe, market, symbol)
+            if initial_data:
+                await websocket.send_json(initial_data)
+
+        # Kafka 구독 및 실시간 데이터 처리
+        consumer = _create_consumer()
+        while True:
+            data = await consumer.get_message()
+            if data['symbol'] == symbol and data['timeframe'] == timeframe:
+                memory_store.update_realtime_data(data)  # 메모리 저장소 업데이트
+                await websocket.send_json(data)
+
+    except WebSocketDisconnect:
+        print(f"WebSocket disconnected: {symbol}")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+
+# @app.websocket("/ws/statistics/{data_type}/{timeframe}")
+# async def statistics_websocket_endpoint(websocket: WebSocket, data_type: str, timeframe: str, market: str):
+#     """통계 데이터 웹소켓 엔드포인트"""
+#     await websocket.accept()
+#     try:
+#         # 초기 데이터 전송 (메모리 저장소에서)
+#         if memory_store.loading_status[timeframe]:
+#             initial_data = memory_store.get_statistics_data(timeframe, market)
+#             if initial_data:
+#                 await websocket.send_json(initial_data)
+
+#         # Kafka 구독 및 실시간 데이터 처리
+#         consumer = _create_consumer()
+#         while True:
+#             msg = consumer.poll(1.0)
+#             if msg is None:
+#                 break
+#             if msg.error():
+#                 continue
+            
+#             data = json.loads(msg.value().decode('utf-8'))
+#             if data['type'] == data_type and data['timeframe'] == timeframe and data['market'] == market:
+#                 memory_store.update_realtime_data(data)  # 메모리 저장소 업데이트
+#                 await websocket.send_json(data)
+
+#     except WebSocketDisconnect:
+#         print(f"WebSocket disconnected: {market}")
+#     except Exception as e:
+#         print(f"WebSocket error: {e}")
+@app.websocket("/ws/statistics/{data_type}")
+async def statistics_websocket_endpoint(websocket: WebSocket, data_type: str):
+    """통계 데이터 웹소켓 엔드포인트"""
+    await websocket.accept()
+    try:
+        # Kafka 구독 및 실시간 데이터 처리
+        consumer = create_kafka_consumer(Config.KAFKA_TOPICS['STATISTICS_DATA'], from_beginning = False)
+        while True:
+            msg = consumer.poll(1.0)
+            if msg is None or msg.error():
+                await asyncio.sleep(0.1)
+                continue
+            
+            data = json.loads(msg.value().decode('utf-8'))
+            memory_store.update_realtime_data(data)  # 메모리 저장소 업데이트
+            if data['type'] == data_type:
+                await websocket.send_json(data)
+
+    except WebSocketDisconnect:
+        print(f"WebSocket disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
 
 if __name__ == "__main__":
     import uvicorn

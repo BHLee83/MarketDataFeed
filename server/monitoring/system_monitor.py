@@ -319,7 +319,7 @@ class SystemMonitor:
         stats['total_count'] += 1
         try:
             data = json.loads(message.value().decode('utf-8'))
-            monitoring_logger.info(f"처리 중인 메시지: {data}")
+            # monitoring_logger.info(f"처리 중인 메시지: {data}")
             
             if not self._validate_and_collect_stats(data, stats, data_stats):
                 stats['invalid_count'] += 1
