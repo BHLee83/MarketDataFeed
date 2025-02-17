@@ -156,8 +156,8 @@
             d.date.toLocaleDateString() : 
             `${d.date.toLocaleDateString()} ${d.date.toLocaleTimeString()}`
           }<br/>값: ${d.value.toFixed(2)}`)
-          .style("left", `${event.pageX + 0}px`)
-          .style("top", `${event.pageY - 0}px`);
+          .style("left", `${event.pageX + 5}px`)
+          .style("top", `${event.pageY + 5}px`);
       })
       .on("mouseout", () => tooltipDiv.style("opacity", 0));
   }
@@ -222,19 +222,8 @@
   .chart-container {
     width: 100%;
     height: 100%;
-    position: relative;
+    /* position: relative; */
     min-height: 150px;
-  }
-
-  .tooltip {
-    position: absolute;
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 8px;
-    font-size: 12px;
-    pointer-events: none;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   }
 
   .no-data {

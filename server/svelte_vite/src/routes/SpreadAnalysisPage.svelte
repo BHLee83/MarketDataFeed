@@ -324,7 +324,7 @@
 
   .chart-item {
     min-width: 250px;  /* 최소 너비 설정 */
-    height: 200px;     /* 고정 높이 설정 */
+    height: 150px;     /* 고정 높이 설정 */
     border: 1px solid #eee;
     border-radius: 4px;
     padding: 5px;
