@@ -41,7 +41,8 @@ class DiversifiedTrend():
         df['trd_date'] = pd.to_datetime(df['trd_date'])
         df = df.set_index('trd_date')
         df['daily_chg'] = df['close'] .pct_change()
-        df['daily_chg'].iloc[0] = 0
+        # df['daily_chg'].iloc[0] = 0
+        df.loc[0, 'daily_chg'] = 0
         df['daily_vol'] = np.log(df['close']).diff().ewm(com = 32).std()
         
         df['vol_fast'] = np.log(df['close']).diff().ewm(halflife = 12).std()
@@ -214,7 +215,7 @@ class DiversifiedTrend():
         if not os.path.exists(self.target_path):
             os.makedirs(self.target_path)
         plt.savefig(self.target_path + self.name_heatmap)
-        plt.show()
+        # plt.show()
         
         plt.figure(figsize = (15,10))
         sch.dendrogram(link, labels = sortIx, leaf_rotation=90, leaf_font_size=8)
@@ -223,6 +224,6 @@ class DiversifiedTrend():
         if not os.path.exists(self.target_path):
             os.makedirs(self.target_path)
         plt.savefig(self.target_path + self.name_dendrogram)
-        plt.show()
+        # plt.show()
 
         plt.close()

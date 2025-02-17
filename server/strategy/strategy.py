@@ -1,5 +1,5 @@
-from DiversifiedTrend.DiversifiedTrend import DiversifiedTrend
-# from server.strategy.DiversifiedTrend.DiversifiedTrend import DiversifiedTrend
+# from DiversifiedTrend.DiversifiedTrend import DiversifiedTrend
+from server.strategy.DiversifiedTrend.DiversifiedTrend import DiversifiedTrend
 
 
 class Strategy:
@@ -33,5 +33,5 @@ class Strategy:
         return self.strat_classes.items()
     
 
-if __name__ == "__main__":
-    Strategy()
+# if __name__ == "__main__":
+#     Strategy()
