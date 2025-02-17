@@ -42,18 +42,11 @@ class MarketDataProcessor:
         # 과거 데이터 로드 및 통계 계산
         if self.load_hist_price():   # 과거 가격 데이터 로드
             server_logger.info(f"과거 가격 데이터 로드 완료: {len(self.symbol_data)} 종목")
-            # if self.publish_hist_price():   # MQ 전송
-            #     server_logger.info("과거 가격 데이터 KAFKA 전송 완료")
-            # if self.load_hist_stat_price():   # 과거 통계 데이터 로드
-            #     server_logger.info("과거 통계 데이터 로드 완료")
-            #     if self.publish_stat_price():   # MQ 전송
-            #         server_logger.info("과거 통계값 KAFKA 전송 완료")
             if self.calculate_latest_pair():  # 최신 데이터에 대한 통계값 계산(일반적으로 전일자)
                 for tf in self.timeframes:  # last_stat_date 값들 미리 로드
                     self.last_stat_dates[tf] = self.db_manager.get_last_statistics_date(f"statistics_price_{tf}")
                 
                 server_logger.info("최근 통계값 계산 완료")
-                # server_logger.info("과거 데이터 프로세스 완료")
         
         # 처리 스레드 시작
         self.start_processing_threads()
@@ -84,79 +77,6 @@ class MarketDataProcessor:
             return False
         
     
-    def load_hist_stat_price(self):
-        """과거 통계 데이터 DB에서 로드"""
-        try:
-            server_logger.info("과거 통계 데이터 로드중...")
-            # 각 타임프레임별로 독립적으로 통계 데이터 로드
-            for tf in self.timeframes:
-                table_name = f'statistics_price_{tf}'
-                # stat_price_data = self.db_manager.load_stat_price(table_name)
-                stat_price_data = self.db_manager.load_stat_price(table_name, '20250110')   # 테스트용
-                self._update_stat_data(tf, stat_price_data)
-            
-            return True
-        except Exception as e:
-            server_logger.error(f"과거 통계 데이터 로드 실패: {e}")
-            return False
-        
-
-    def publish_hist_price(self):
-        """과거 데이터를 Kafka 토픽으로 발행"""
-        for symbol, timeframes in self.symbol_data.items():
-            for tf, candles in timeframes.items():
-                topic = self.set_topic('price', tf)
-                for candle in candles:
-                    data = {
-                        'symbol': symbol,
-                        'data': candle
-                    }
-                    if tf != '1d':  # 분봉인 경우 타임프레임 정보 추가
-                        data['timeframe'] = tf
-                    self.kafka_handler.send_data(topic, data)
-
-        return True
-    
-    
-    def publish_stat_price(self):
-        """과거 통계 데이터를 Kafka 토픽으로 발행"""
-        topic = self.set_topic('statistics')
-        for tf, pairs in self.stat_data.items():
-            for pair, stats in pairs.items():
-                for data in stats:
-                    # 스프레드 데이터 전송
-                    spread_data = {
-                        'type': 'spread',
-                        'timeframe': tf,
-                        'symbol': pair,
-                        'market': data['market'],
-                        'symbol1': data['symbol1'],
-                        'symbol2': data['symbol2'],
-                        'value': data['spread'],
-                        'trd_date': data['trd_date'],
-                        'trd_time': data['trd_time']
-                    }
-                    self.kafka_handler.send_data(topic, spread_data)
-                    
-                    # 상관계수 데이터 전송
-                    for period in self.corr_periods:
-                        corr_data = {
-                            'type': 'correlation',
-                            'timeframe': tf,
-                            'symbol': pair,
-                            'market': data['market'],
-                            'symbol1': data['symbol1'],
-                            'symbol2': data['symbol2'],
-                            'period': period,
-                            'value': data[f'corr_{period}'],
-                            'trd_date': data['trd_date'],
-                            'trd_time': data['trd_time']
-                        }
-                        self.kafka_handler.send_data(topic, corr_data)
-
-        return True
-
-
     def set_topic(self, type, tf=None):
         """데이터 종류, 타임프레임에 따라 topic 네임 설정"""
         if type == 'price':
@@ -314,17 +234,6 @@ class MarketDataProcessor:
                     print("kafka의 minute topic에 전달: ", data_to_send)
 
 
-    # def is_new_timeframe(self, new_time, last_candle, minutes):
-    #     """새로운 타임프레임 여부 확인"""
-    #     last_time = int(last_candle['trd_time'])
-
-    #     # HHMM 형식에서 타임프레임의 완성 경계 확인
-    #     last_frame_start = ((last_time - 1) // minutes) * minutes + minutes
-
-    #     # 새로운 타임프레임이 시작되었는지 확인
-    #     return new_time > last_frame_start
-
-
     def update_daily_candle(self, symbol, new_candle):
         """일봉 데이터 업데이트"""
         daily_candles = self.symbol_data[symbol]['1d']
@@ -358,7 +267,7 @@ class MarketDataProcessor:
             'time_series': threading.Thread(target=self.process_time_series, daemon=True),
             # 'statistics': threading.Thread(target=self.process_statistics, daemon=True)
             # 'chart_data': threading.Thread(target=self.process_chart_data, daemon=True),
-            # 'publish_processed_data': threading.Thread(target=self.publish_processed_data, daemon=True)
+            # 'processed_data': threading.Thread(target=self.publish_processed_data, daemon=True)
         }
         
         for thread in self.threads.values():
