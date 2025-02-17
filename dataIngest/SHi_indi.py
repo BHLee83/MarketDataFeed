@@ -23,13 +23,10 @@ class SHiIndiClient(QMainWindow):
         self.cnt_mst_rcv = 0
         self.code_list = [] # 전체 종목 리스트
         self.codes = [] # self.code_list에서 '단축코드'만 추출
-        self.cnt_daily_rcv = 0
-        self.cnt_min_rcv = {'1m': 0, '3m': 0, '5m': 0, '10m': 0, '15m': 0, '30m': 0}
-        self.data_daily = []    # 일봉 데이터
-        self.data_min = {'1m': [], '3m': [], '5m': [], '10m': [], '15m': [], '30m': []}   # 분봉 데이터
         self.rqidD = {}
         self.strToday = datetime.today().strftime('%Y%m%d')
         self.strDtTarget = self.strToday
+        self.eq_fut_code = '101'
 
         self.config = {
             'user': Config.DB_USER,
@@ -92,6 +89,11 @@ class SHiIndiClient(QMainWindow):
         
     def btn_Insert(self):
         '버튼 클릭시 데이터 수집/입력 실행'
+        self.cnt_daily_rcv = 0
+        self.cnt_min_rcv = {'1m': 0, '3m': 0, '5m': 0, '10m': 0, '15m': 0, '30m': 0}
+        self.data_daily = []    # 일봉 데이터
+        self.data_min = {'1m': [], '3m': [], '5m': [], '10m': [], '15m': [], '30m': []}   # 분봉 데이터
+
         self.strDtTarget = self.leDate.text()
         if self.strDtTarget == self.strToday:
             print("데이터 요청 날짜가 오늘입니다")
@@ -99,6 +101,7 @@ class SHiIndiClient(QMainWindow):
         if not self.mst_ready:
             print("종목코드 리스트 수신 필요")
             return
+        print(f"데이터 요청 날짜: {self.strDtTarget}")
 
         self.rqDaily()  # 일 데이터 요청
         self.rqMinute() # 분 데이터 요청
@@ -160,7 +163,7 @@ class SHiIndiClient(QMainWindow):
     def rqMinute(self):
         '분봉 데이터 요청'
         dataType = '1'
-        timeIntvls = ['1', '3', '5', '10', '15', '30']   # 1분, 3분, 5분, 10분, 15분, 30분
+        timeIntvls = ['1', '5', '15', '30']   # 1분, 3분, 5분, 10분, 15분, 30분
         for i in timeIntvls:
             for j in self.code_list:
                 tr_chart_id = self.set_tr_chart_id(j)
@@ -185,21 +188,21 @@ class SHiIndiClient(QMainWindow):
                 if name == 'fut_mst':
                     shortCode = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
                     if shortCode.startswith('10'):  # 1: 선물 / 01: 코스피200, 04: 변동성, 05: 미니선물, 06: 코스닥, 07: 유로스톡스50, 08: KRX300
-                        dictMst['구분']= name
+                        dictMst['구분'] = name
                         dictMst['단축코드'] = shortCode
                         dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)
                         dictMst['기초자산ID'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 8)
                 elif name == 'cfut_mst':
-                    dictMst['구분']= name
+                    dictMst['구분'] = name
                     dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
                     dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 3)
                     dictMst['기초자산ID'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)
                 # elif name == 'fri_mst':
-                #     dictMst['구분']= name
+                #     dictMst['구분'] = name
                 #     dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 0)   # GIC
                 #     dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 4)
                 # elif name == 'gmf_mst':
-                #     dictMst['구분']= name
+                #     dictMst['구분'] = name
                 #     dictMst['단축코드'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 1)
                 #     dictMst['종목명'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 2)
                 self.code_list.append(dictMst)
@@ -269,7 +272,10 @@ class SHiIndiClient(QMainWindow):
                     new_entries.append({'구분': 'cfut_mst', '단축코드': f'KRDRVFU{asset}', '종목명': f'{asset} 연결', '기초자산ID': asset})
 
             # 기존 데이터에 추가
-            self.code_list.extend(new_entries)
+            # self.code_list.extend(new_entries)    # 애초에 연결선물만 요청하도록 변경
+            fut_mst_asset = sorted([item for item in self.code_list if item['구분'] == 'fut_mst'], key=lambda x: x['단축코드'])[0]
+            new_entries.append(fut_mst_asset)
+            self.code_list = new_entries
             self.codes = [code['단축코드'] for code in self.code_list]
             self.mst_ready = True
 
@@ -313,6 +319,10 @@ class SHiIndiClient(QMainWindow):
             #         if float(data['close']) != 0:
             #             self.data_daily.append(data)
         if self.cnt_daily_rcv == len(self.code_list):
+            eq_symbol_1st = sorted([i for i in self.codes if i.startswith(self.eq_fut_code)])[0]
+            eq_data = [i for i in self.data_daily if i['symbol'] == eq_symbol_1st]
+            eq_data[0]['symbol'] = self.eq_fut_code
+            # self.data_daily.append(eq_data[0])    # 추가해야 하나, 연결만 남기기 위해 변경하는걸로 대체
             print("일 데이터 수신 완료")
             self.insert_to_db(f'1{dataType}', self.data_daily)
 
@@ -355,7 +365,14 @@ class SHiIndiClient(QMainWindow):
             #         data['trd_value'] = self.IndiTR.dynamicCall("GetMultiData(int, int)", i, 7)     # 단위거래대금
             #         if float(data['close']) != 0:
             #             self.data_min.append(data)
+            if dataType == '30':
+                dataType = dataType
         if self.cnt_min_rcv[f'{dataType}m'] == len(self.code_list):
+            eq_symbol_1st = sorted([i for i in self.codes if i.startswith(self.eq_fut_code)])[0]
+            eq_data = [i for i in self.data_min[f'{dataType}m'] if i['symbol'] == eq_symbol_1st]
+            for i in eq_data:
+                i['symbol'] = self.eq_fut_code
+                # self.data_min[f'{dataType}m'].append(i)    # 추가해야 하나, 연결만 남기기 위해 변경하는걸로 대체
             print(f"{dataType}분 데이터 수신 완료")
             self.insert_to_db(f'{dataType}m', self.data_min[f'{dataType}m'])
 
