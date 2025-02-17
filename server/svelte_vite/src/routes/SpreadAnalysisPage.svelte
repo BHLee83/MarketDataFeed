@@ -21,11 +21,10 @@
   let marketStates = markets.reduce((acc, market) => {
     acc[market] = {
       selectedTimeframe: '1d',
-      selectedDateRange: '1d',
-      selectedSpread: null,
-      spreadData: {},
-      chartData: [],       // 차트를 위한 시계열 데이터
-      isLoading: false,  // 마켓별 로딩 상태 추가
+      selectedDateRange: '1m',
+      spreadCharts: [],  // 각 마켓별 차트 데이터 배열
+      isLoading: false,
+      collapsed: false  // 접기/펼치기 상태 추가
     };
     return acc;
   }, {});
@@ -67,28 +66,19 @@
   // 마켓별 데이터 로드
   async function loadMarketData(market) {
     try {
-      console.log(`[${market}] 데이터 로드 시작`);
       const state = marketStates[market];
+      state.isLoading = true;
+      
       const { start, end } = await calculateDateRange(state.selectedDateRange);
-      
-      console.log(`[${market}] 날짜 범위:`, { start, end });
-      console.log(`[${market}] 타임프레임:`, state.selectedTimeframe);
-      
       const data = await fetchStatisticsData('spread', state.selectedTimeframe, market, null, start, end);
-      console.log(`[${market}] 받아온 데이터:`, data);
       
-      if (state.selectedSpread) {
-        console.log(`[${market}] 선택된 스프레드:`, state.selectedSpread);
-        state.chartData = data[state.selectedSpread] || [];
-        console.log(`[${market}] 차트 데이터:`, state.chartData);
-      }
-      
-      state.spreadData = mergeSpreadData(state.spreadData, data);
-      console.log(`[${market}] 병합된 스프레드 데이터:`, state.spreadData);
-      
-      marketStates[market] = { ...state };
-      console.log(`[${market}] 최종 마켓 상태:`, marketStates[market]);
+      // 스프레드 데이터를 차트 형식으로 변환
+      state.spreadCharts = Object.entries(data).map(([key, values]) => ({
+        key,
+        data: values
+      }));
 
+      marketStates[market] = { ...state, isLoading: false };
     } catch (err) {
       error = err.message;
       console.error(`[${market}] 데이터 로딩 에러:`, err);
@@ -138,28 +128,14 @@
 
   // 실시간 데이터 업데이트
   function updateMarketData(market, data) {
-    console.log(`[${market}] 실시간 데이터 수신:`, data);
-    
     const state = marketStates[market];
     const key = `${data.symbol1}-${data.symbol2}`;
-    if (state.selectedSpread === key) {
-      state.chartData = [...state.chartData, data];
-      // console.log(`[${market}] 업데이트된 차트 데이터:`, state.chartData);
-    }
     
-    // state.spreadData = mergeSpreadData(state.spreadData, [data]);
-    state.spreadData[key] = data;
-    // console.log(`[${market}] 업데이트된 스프레드 데이터:`, state.spreadData[key]);
-    
-    // 1초 후 업데이트 표시 제거
-    setTimeout(() => {
-      if (state.spreadData[key]) {
-        state.spreadData[key] = { ...state.spreadData[key], updated: false };
-      }
+    const chartIndex = state.spreadCharts.findIndex(chart => chart.key === key);
+    if (chartIndex >= 0) {
+      state.spreadCharts[chartIndex].data = [...state.spreadCharts[chartIndex].data, data];
       marketStates[market] = { ...state };
-    }, 1000);
-
-    marketStates[market] = { ...state };
+    }
   }
 
   // 스프레드 선택 처리 함수 추가
@@ -211,6 +187,12 @@
     }
   }
 
+  // 접기/펼치기 토글 함수
+  function toggleMarket(market) {
+    marketStates[market].collapsed = !marketStates[market].collapsed;
+    marketStates = marketStates;  // Svelte 반응성 트리거
+  }
+
   onMount(() => {
     console.log('컴포넌트 마운트 시작');
     
@@ -237,11 +219,16 @@
   });
 </script>
 
-<div class="markets">
+<div class="markets-grid">
   {#each markets as market}
     <div class="market-section">
       <div class="market-header">
-        <h3>{market}</h3>
+        <div class="header-left">
+          <button class="toggle-btn" on:click={() => toggleMarket(market)}>
+            {marketStates[market].collapsed ? '▶' : '▼'}
+          </button>
+          <h3>{market}</h3>
+        </div>
         <div class="controls">
           <select 
             bind:value={marketStates[market].selectedTimeframe}
@@ -259,207 +246,110 @@
         </div>
       </div>
 
-      <div class="spread-list">
-        {#if marketStates[market].isLoading}
-          <div class="loading">데이터 로딩 중...</div>
-        {:else}
-          {#each Object.entries(marketStates[market].spreadData) as [key, spread]}
-            <button 
-              class="spread-item" 
-              class:selected={marketStates[market].selectedSpread === key}
-              class:highlight={spread.updated}
-              on:click={() => handleSpreadSelect(market, key)}
-            >
-              <div class="spread-info">
-                <div class="spread-pair">{key}</div>
-                <div class="spread-time">
-                  {spread.trd_date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')} 
-                  {spread.trd_time?.replace(/(\d{2})(\d{2})/, '$1:$2:00')}
+      {#if !marketStates[market].collapsed}
+        <div class="charts-container" class:collapsed={marketStates[market].collapsed}>
+          {#if marketStates[market].isLoading}
+            <div class="loading">데이터 로딩 중...</div>
+          {:else}
+            <div class="charts-grid">
+              {#each marketStates[market].spreadCharts as chart}
+                <div class="chart-item">
+                  <div class="chart-title">{chart.key}</div>
+                  <SpreadChart 
+                    spreadData={chart.data}
+                    timeframe={marketStates[market].selectedTimeframe}
+                    dateRange={marketStates[market].selectedDateRange}
+                  />
                 </div>
-              </div>
-              <div class="spread-value" class:negative={spread.value1 < 0}>
-                {spread.value1?.toFixed(2)}
-              </div>
-            </button>
-          {/each}
-        {/if}
-      </div>
-
-      <div class="chart-section">
-        <div class="chart-header">
-          <select 
-            bind:value={marketStates[market].selectedDateRange}
-            disabled={marketStates[market].isLoading}
-            on:change={() => handleDateRangeChange(market)}
-          >
-            {#each dateRanges as range}
-              <option value={range.value}>{range.label}</option>
-            {/each}
-          </select>
+              {/each}
+            </div>
+          {/if}
         </div>
-        
-        {#if marketStates[market].selectedSpread}
-          <SpreadChart 
-            
-            spreadData={marketStates[market].chartData}
-            timeframe={marketStates[market].selectedTimeframe}
-            dateRange={marketStates[market].selectedDateRange}
-          />
-        {:else}
-          <div class="no-chart">스프레드를 선택하세요</div>
-        {/if}
-      </div>
+      {/if}
     </div>
   {/each}
 </div>
 
 <style>
-  .markets {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
+  .markets-grid {
+    display: flex;
+    flex-direction: column;
     gap: 20px;
-    padding: 20px;
+    padding: 10px;
   }
-  
+
   .market-section {
     border: 1px solid #ddd;
-    padding: 15px;
-    border-radius: 10px;
-    width: 100%;
-    box-sizing: border-box;
+    border-radius: 8px;
+    padding: 10px;
   }
 
   .market-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 15px;
-  }
-
-  .spread-list {
-    height: 400px;
-    overflow-y: auto;
-    border: 1px solid #eee;
-    width: 100%;
-  }
-
-  .spread-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px;
-    height: 60px;
-    /* min-height: 40px; */
-    border-bottom: 1px solid #eee;
-    width: 95%;
-    /* box-sizing: border-box; */
-    /* background: none; */
-    /* border: none; */
-    /* text-align: left; */
-    cursor: pointer;
-    transition: all 0.3s ease;
-  }
-
-  .spread-item:hover {
-    background-color: #f5f5f5;
-  }
-
-  .spread-item.selected {
-    background-color: #e3f2fd;
-  }
-
-  .spread-info {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .spread-pair {
-    font-weight: 500;
-    /* color: #333; */
-  }
-
-  .spread-time {
-    font-size: 0.9em;
-    color: #666;
-  }
-
-  .spread-value {
-    font-size: 1.1em;
-    font-weight: 600;
-    color: #2196F3;
-  }
-
-  .spread-value.negative {
-    color: #f44336;
-  }
-
-  .chart-section {
-    margin-top: 15px;
-    height: 200px;
-    width: 100%;
-  }
-
-  .chart-header {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
     margin-bottom: 10px;
   }
 
-  select {
-    padding: 2px 4px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    /* appearance: none; */
-    /* background-color: white; */
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
-  .no-data, .no-chart {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100%;
+  .toggle-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    font-size: 12px;
     color: #666;
   }
 
-  /* 스크롤바 스타일링 */
-  .spread-list::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+  .toggle-btn:hover {
+    color: #333;
   }
 
-  .spread-list::-webkit-scrollbar-track {
-    background: #f1f1f1;
+  .collapsed {
+    display: none;
   }
 
-  .spread-list::-webkit-scrollbar-thumb {
-    background: #888;
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);  /* 4개의 열로 변경 */
+    gap: 10px;
+    overflow-x: auto;
+    padding: 10px;
+  }
+
+  .chart-item {
+    min-width: 250px;  /* 최소 너비 설정 */
+    height: 200px;     /* 고정 높이 설정 */
+    border: 1px solid #eee;
     border-radius: 4px;
+    padding: 5px;
   }
 
-  .spread-list::-webkit-scrollbar-thumb:hover {
-    background: #555;
-  }
-
-  .spread-item.updated {
-    background-color: rgba(33, 150, 243, 0.1);
-  }
-
-  @keyframes highlight {
-    from { background-color: rgba(33, 150, 243, 0.2); }
-    to { background-color: transparent; }
-  }
-
-  .spread-item.highlight {
-    animation: highlight 3s ease;
+  .chart-title {
+    font-size: 12px;
+    text-align: center;
+    margin-bottom: 5px;
   }
 
   .loading {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100px;
+    text-align: center;
+    padding: 20px;
     color: #666;
+  }
+
+  select {
+    padding: 4px 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+  }
+
+  h3 {
+    margin: 0;
+    font-size: 14px;
   }
 </style> 

@@ -11,7 +11,11 @@
   let height = 0;
   let resizeObserver;
 
-  const margin = { top: 20, right: 30, bottom: 30, left: 60 };  // 컴포넌트 레벨로 이동
+  const margin = { top: 20, right: 50, bottom: 40, left: 60 };
+
+  function getTimeFormat() {
+    return timeframe === '1d' ? d3.timeFormat("%y/%m/%d") : d3.timeFormat("%m/%d %H:%M");
+  }
 
   $: if (spreadData && chartContainer) {
     updateChart();
@@ -20,153 +24,172 @@
   function updateChart() {
     if (!chartContainer || !spreadData.length) return;
 
-    // 기존 차트와 이전 스케일 완전히 제거
+    const containerWidth = chartContainer.offsetWidth;
+    const containerHeight = chartContainer.offsetHeight;
+    
+    width = containerWidth - margin.left - margin.right;
+    height = containerHeight - margin.top - margin.bottom;
+
+    if (width <= 0 || height <= 0) return;
+
     d3.select(chartContainer).selectAll("*").remove();
 
-    // 차트 크기 설정
-    const margin = { top: 20, right: 30, bottom: 30, left: 60 };
-    width = chartContainer.clientWidth - margin.left - margin.right;
-    height = chartContainer.clientHeight - margin.top - margin.bottom;
-
-    // 데이터 처리
-    const chartData = spreadData
-      .map(d => {
-        try {
-          const dateStr = d.trd_date.toString().padStart(8, '0');
-          const timeStr = d.trd_time.trim()? d.trd_time.toString().padStart(4, '0') : '0000';
-          
-          return {
-            dateTime: `${dateStr}-${timeStr}`,
-            date: new Date(
-              dateStr.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') + 
-              'T' + 
-              timeStr.replace(/(\d{2})(\d{2})/, '$1:$2:00')
-            ),
-            value: parseFloat(d.value1),
-            symbol1: d.symbol1,
-            symbol2: d.symbol2
-          };
-        } catch (e) {
-          console.error('Data processing error:', e, d);
-          return null;
-        }
-      })
-      .filter(d => d && !isNaN(d.value) && d.date instanceof Date && !isNaN(d.date))
-      .sort((a, b) => a.date - b.date);
-
-    if (!chartData.length) {
-      if (spreadData && spreadData.length) {
-        console.error('Data processing failed: No valid data after processing');
-      }
-      return;
-    }
-
-    // SVG 생성
     const svg = d3.select(chartContainer)
       .append("svg")
-      .attr("width", width + margin.left + margin.right)
-      .attr("height", height + margin.top + margin.bottom)
+      .attr("width", containerWidth)
+      .attr("height", containerHeight)
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // X축 스케일 (비연속 시계열)
-    const xScale = d3.scalePoint()
-      .domain(chartData.map(d => d.dateTime))
-      .range([0, width])
-      .padding(0.5);
+    const chartData = processData(spreadData);
+    
+    const x = d3.scaleTime()
+      .domain(d3.extent(chartData, d => d.date))
+      .range([0, width]);
 
-    // Y축 스케일 - 매번 새로 계산
-    const yScale = d3.scaleLinear()
+    const y = d3.scaleLinear()
       .domain([
         d3.min(chartData, d => d.value),
         d3.max(chartData, d => d.value)
       ])
-      .range([height, 0]);
+      .range([height, 0])
+      .nice();  // 깔끔한 눈금을 위해 추가
 
-    // 축 설정
-    const xAxis = d3.axisBottom(xScale)
-      .tickFormat(d => {
-        const [date, time] = d.split('-');
-        return timeframe === '1d' 
-            ? `${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}`
-            : `${date.slice(4,6)}-${date.slice(6,8)} ${time.slice(0,2)}:${time.slice(2,4)}`;
-      })
-      .tickValues(xScale.domain().filter((_, i) => 
-        i % Math.ceil(chartData.length / 10) === 0
-      ));
-
-    const yAxis = d3.axisLeft(yScale)
-      .tickFormat(d => d.toFixed(2))
-      .ticks(5);
-
-    // 축 그리기
+    // x축 추가
     svg.append("g")
       .attr("transform", `translate(0,${height})`)
-      .call(xAxis)
-      .selectAll("text")
+      .call(d3.axisBottom(x)
+        .ticks(5)
+        .tickFormat(getTimeFormat()))
+      .selectAll("text")  // x축 레이블 회전
       .style("text-anchor", "end")
       .attr("dx", "-.8em")
       .attr("dy", ".15em")
-      .attr("transform", "rotate(-45)");
+      .attr("transform", "rotate(-25)");
 
+    // y축 추가
     svg.append("g")
-      .call(yAxis);
+      .call(d3.axisLeft(y)
+        .ticks(5)
+        .tickSize(-width) // 그리드 라인 추가
+        .tickSizeOuter(0)
+        .tickPadding(5)
+        .tickFormat(d => {
+          if (Math.abs(d) >= 1000000) {
+            return (d / 1000000).toFixed(1) + 'M';
+          } else if (Math.abs(d) >= 1000) {
+            return (d / 1000).toFixed(1) + 'K';
+          }
+          return d.toFixed(2);
+        }))
+        .selectAll(".tick line")
+        .attr("stroke", "lightgray");
+        // .attr("stroke-opacity", 0.5);
 
-    // 라인 생성
+
+    // 라인 생성 및 그리기
     const line = d3.line()
-      .x(d => xScale(d.dateTime))
-      .y(d => yScale(d.value));
+      .x(d => x(d.date))
+      .y(d => y(d.value))
+      .defined(d => !isNaN(d.value));
 
-    // 라인 그리기
     svg.append("path")
       .datum(chartData)
+      .attr("class", "line")
       .attr("fill", "none")
-      .attr("stroke", "steelblue")
+      .attr("stroke", "#2196F3")
       .attr("stroke-width", 1.5)
       .attr("d", line);
 
-    // 데이터 포인트 그리기
-    const dots = svg.selectAll(".dot")
-      .data(chartData)
-      .enter()
-      .append("circle")
-      .attr("class", "dot")
-      .attr("cx", d => xScale(d.dateTime))
-      .attr("cy", d => yScale(d.value))
-      .attr("r", 3)
-      .attr("fill", d => d.value >= 0 ? "#2196F3" : "#f44336");
+    // 최대/최소값 점 표시
+    const maxPoint = chartData.slice(0, -1).reduce((max, p) => p.value > max.value ? p : max);
+    const minPoint = chartData.slice(0, -1).reduce((min, p) => p.value < min.value ? p : min);
 
-    // 툴팁 설정
-    const tooltip = d3.select(chartContainer)
-      .append("div")
-      .attr("class", "tooltip")
-      .style("opacity", 0);
-
-    // 호버 효과
-    dots.on("mouseover", (event, d) => {
-      tooltip.transition()
-        .duration(200)
-        .style("opacity", .9);
-      tooltip.html(
-        `시간: ${d.date.toLocaleString()}<br/>
-         값: ${d.value.toFixed(2)}`
-      )
-      .style("left", (event.pageX + 10) + "px")
-      .style("top", (event.pageY - 28) + "px");
-    })
-    .on("mouseout", () => {
-      tooltip.transition()
-        .duration(500)
-        .style("opacity", 0);
+    [maxPoint, minPoint].forEach(point => {
+      svg.append("circle")
+        .attr("cx", x(point.date))
+        .attr("cy", y(point.value))
+        .attr("r", 4)
+        .style("fill", point === maxPoint ? "#4CAF50" : "#f44336");
     });
 
-    // 그리드 라인 추가
-    svg.append("g")
-      .attr("class", "grid")
-      .call(d3.axisLeft(yScale)
-        .tickSize(-width)
-        .tickFormat("")
-      );
+    // 현재값 표시
+    const lastPoint = chartData[chartData.length - 1];
+    svg.append("text")
+      .attr("x", width + 5)
+      .attr("y", y(lastPoint.value))
+      .attr("dy", "0.35em")
+      .style("font-size", "10px")
+      .text(lastPoint.value.toFixed(2));
+
+    // 툴팁 설정
+    const tooltipDiv = d3.select(chartContainer)
+      .append("div")
+      .attr("class", "tooltip")
+      .style("opacity", 0)
+      .style("position", "absolute") 
+      .style("background", "rgba(255, 255, 255, 0.9)")
+      .style("padding", "8px")
+      .style("border", "1px solid #ddd")
+      .style("border-radius", "4px")
+      .style("pointer-events", "none")
+      .style("font-size", "10px")
+      .style("box-shadow", "0 2px 4px rgba(0,0,0,0.1)");
+
+    // 인터랙티브 영역
+    svg.append("rect")
+      .attr("class", "overlay")
+      .attr("width", width+1)
+      .attr("height", height)
+      .style("opacity", 0)
+      .on("mousemove", function(event) {
+        const [xPos] = d3.pointer(event, this);
+        const bisect = d3.bisector(d => d.date).left;
+        const x0 = x.invert(xPos);
+        const i = bisect(chartData, x0, 1);
+        const d0 = chartData[i - 1];
+        const d1 = chartData[i];
+        const d = x0 - d0.date > d1.date - x0 ? d1 : d0;
+
+        tooltipDiv.style("opacity", 1)
+          .html(`${timeframe === '1d' ? 
+            d.date.toLocaleDateString() : 
+            `${d.date.toLocaleDateString()} ${d.date.toLocaleTimeString()}`
+          }<br/>값: ${d.value.toFixed(2)}`)
+          .style("left", `${event.pageX + 0}px`)
+          .style("top", `${event.pageY - 0}px`);
+      })
+      .on("mouseout", () => tooltipDiv.style("opacity", 0));
+  }
+
+  function processData(rawData) {
+    return rawData.map(item => {
+      try {
+        const cleanDate = item.trd_date.toString().padStart(8, '0');
+        const timeStr = item.trd_time ? item.trd_time.toString().padStart(4, '0') : '0000';
+        
+        const year = parseInt(cleanDate.substring(0, 4));
+        const month = parseInt(cleanDate.substring(4, 6)) - 1;
+        const day = parseInt(cleanDate.substring(6, 8));
+        const hour = parseInt(timeStr.substring(0, 2));
+        const minute = parseInt(timeStr.substring(2, 4));
+        
+        const date = new Date(year, month, day, hour, minute);
+        
+        return {
+          date,
+          dateTime: `${cleanDate}-${timeStr}`,
+          value: parseFloat(item.value1),
+          symbol1: item.symbol1,
+          symbol2: item.symbol2
+        };
+      } catch (error) {
+        console.error('Data processing error:', error, item);
+        return null;
+      }
+    })
+    .filter(item => item !== null && !isNaN(item.value))
+    .sort((a, b) => a.date - b.date);
   }
 
   // 데이터나 타임프레임이 변경될 때마다 차트 갱신
@@ -177,37 +200,41 @@
   }
 
   onMount(() => {
-    resizeObserver = new ResizeObserver(() => {
-      if (chartContainer) {
-        width = chartContainer.clientWidth - margin.left - margin.right;
-        height = chartContainer.clientHeight - margin.top - margin.bottom;
-        updateChart();
-      }
-    });
-    resizeObserver.observe(chartContainer);
-  });
-
-  onDestroy(() => {
-    if (resizeObserver) {
-      resizeObserver.disconnect();
+    if (chartContainer) {
+      resizeObserver = new ResizeObserver(() => {
+        if (spreadData) updateChart();
+      });
+      resizeObserver.observe(chartContainer);
     }
+    return () => {
+      if (resizeObserver) resizeObserver.disconnect();
+    };
   });
 </script>
 
-<div class="chart-container" bind:this={chartContainer}>
+<div bind:this={chartContainer} class="chart-container">
   {#if !spreadData || spreadData.length === 0}
-    <div class="no-data">데이터가 없습니다</div>
+    <div class="no-data">데이터 없음</div>
   {/if}
 </div>
 
 <style>
   .chart-container {
     width: 100%;
-    height: 80%;
+    height: 100%;
     position: relative;
-    background: white;
+    min-height: 150px;
+  }
+
+  .tooltip {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.9);
     border: 1px solid #ddd;
     border-radius: 4px;
+    padding: 8px;
+    font-size: 12px;
+    pointer-events: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
   }
 
   .no-data {
@@ -216,17 +243,7 @@
     align-items: center;
     height: 100%;
     color: #666;
-  }
-
-  :global(.tooltip) {
-    position: absolute;
-    padding: 8px;
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    pointer-events: none;
     font-size: 12px;
-    z-index: 100;
   }
 
   :global(.grid line) {
