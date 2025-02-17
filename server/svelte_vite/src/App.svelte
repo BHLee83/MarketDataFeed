@@ -4,6 +4,7 @@
   import Home from "./routes/Home.svelte";
   import CorrelationMatrixPage from "./routes/CorrelationMatrixPage.svelte";
   import SpreadAnalysisPage from "./routes/SpreadAnalysisPage.svelte";
+  import DiversifiedTrendPage from "./routes/DiversifiedTrendPage.svelte";
   
   // URL 기반 라우팅을 위한 현재 URL 가져오기
   export let url = "";
@@ -11,7 +12,9 @@
   let isMenuOpen = {
     market: false,
     analysis: false,
+    technical: false,
     trading: false,
+    strategy: false,
     settings: false
   };
   let isDiabled = {
@@ -85,9 +88,19 @@
           <span>트레이딩</span>
           {#if isMenuOpen.trading}
             <div class="submenu" transition:fade={{duration: 100}}>
-              <!-- <Link to="/trading/signal">시그널</Link>
-              <Link to="/trading/history">내역</Link> -->
-              <span class="disabled">시그널</span>
+              <div class="submenu-item"
+                role="menuitem"
+                tabindex="0"
+                on:mouseenter={() => isMenuOpen.strategy = true}
+                on:mouseleave={() => isMenuOpen.strategy = false}>
+                <Link to="/trading/strategy">전략 ▶</Link>
+                {#if isMenuOpen.strategy}
+                  <div class="submenu-horizontal" transition:fade={{duration: 100}}>
+                    <Link to="/strategy/DiversifiedTrend">DiversifiedTrend</Link>
+                  </div>
+                {/if}
+              </div>
+              <!-- <Link to="/trading/history">내역</Link> -->
               <span class="disabled">내역</span>
             </div>
           {/if}
@@ -116,6 +129,8 @@
     <Route path="/" component={Home} />
     <Route path="/analysis/correlation" component={CorrelationMatrixPage} />
     <Route path="/analysis/spread" component={SpreadAnalysisPage} />
+    <!-- <Route path="/trading/strategy" component={StrategyPage} /> -->
+    <Route path="/strategy/DiversifiedTrend" component={DiversifiedTrendPage} />
   </main>
 </Router>
 

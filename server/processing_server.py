@@ -8,6 +8,8 @@ from utils.logger import server_logger
 from server.handlers.kafka_handler import KafkaHandler
 from server.market_data_processor import MarketDataProcessor
 
+import strategy.strategy as strategy
+
 class ProcessingServer:
     def __init__(self):
         conf = {
@@ -37,13 +39,15 @@ class ProcessingServer:
         )
         self.running = True
 
+        self.strategies = strategy.Strategy()
+
     def start(self):
         """데이터 처리 시작"""
         server_logger.info("데이터 처리 서버가 시작되었습니다.")
         
         try:
             while self.running:
-                # MarketDataProcessor에서 데이터 처리별 스레드 생성으로 여기서 따로 해줄건 없음
+                self.strategies.run()   # 전략 실행
                 pass
 
         except KeyboardInterrupt:
