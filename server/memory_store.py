@@ -42,15 +42,16 @@ class MemoryStore:
 
     async def _background_loading(self, db_manager):
         """백그라운드 데이터 로딩"""
-        timeframes = ['1d', '30m', '15m', '10m', '5m', '3m', '1m']
+        # timeframes = ['1d', '30m', '15m', '10m', '5m', '3m', '1m']
+        timeframes = ['1d'] # 임시로 일봉만 로드
         
-        # 날짜 범위 설정 (최근 1개월)
-        total_days = 8
+        # 날짜 범위 설정 (최근 1주)
+        total_days = 5
         chunk_size = 1  # 하루 단위로 처리
         
         end_date = datetime.now()
-        for day_offset in range(0, total_days, chunk_size):
-            current_end = end_date - timedelta(days=day_offset)
+        current_end = end_date
+        while total_days > 0:
             # 종료일이 주말(토, 일)이면 평일로 조정
             while current_end.weekday() in (5, 6):  # 5: 토요일, 6: 일요일
                 current_end -= timedelta(days=1)
@@ -77,6 +78,10 @@ class MemoryStore:
                     self.last_load_date[tf] = current_start
                 except Exception as e:
                     self.logger.error(f"{tf} 데이터 로드 중 오류: {e}")
+
+            # 이전 날짜로 이동
+            current_end = current_start
+            total_days -= chunk_size
 
     async def _load_timeframe_data(self, db_manager, timeframe: str, start_date: str, end_date: str):
         """타임프레임별 데이터 로드"""
