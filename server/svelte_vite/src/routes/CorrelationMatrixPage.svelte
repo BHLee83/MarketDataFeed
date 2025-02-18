@@ -60,7 +60,6 @@
   // 마켓별 데이터 로드
   async function loadMarketData(market) {
     try {
-      // 로딩 상태 설정
       marketStates = {
         ...marketStates,
         [market]: {
@@ -70,7 +69,6 @@
       };
 
       const { start, end } = await calculateDateRange(marketStates[market].selectedDateRange);
-      
       const data = await fetchStatisticsData(
         `corr_${marketStates[market].selectedPeriod}`,
         marketStates[market].selectedTimeframe,
@@ -79,20 +77,21 @@
         start,
         end
       );
-      
+
       if (data) {
         const symbolSet = new Set();
         const correlationMap = new Map();
 
-        Object.entries(data).forEach(([key, correlations]) => {
+        Object.entries(data).forEach(([key, value]) => {
           const [symbol1, symbol2] = key.split('-');
           symbolSet.add(symbol1);
           symbolSet.add(symbol2);
 
-          if (Array.isArray(correlations) && correlations.length > 0) {
-            const lastCorrelation = correlations[correlations.length - 1];
-            if (lastCorrelation && typeof lastCorrelation.value1 !== 'undefined') {
-              correlationMap.set(key, lastCorrelation.value1);
+          // value1 배열에서 마지막 값 사용
+          if (value && Array.isArray(value.value1) && value.value1.length > 0) {
+            const corrValue = value.value1[value.value1.length - 1];
+            if (typeof corrValue === 'number' && !isNaN(corrValue)) {
+              correlationMap.set(key, corrValue);
             }
           }
         });
@@ -106,7 +105,6 @@
           });
         });
 
-        // 상태 직접 업데이트
         marketStates = {
           ...marketStates,
           [market]: {
@@ -117,19 +115,10 @@
           }
         };
       }
-      
     } catch (err) {
       error = err.message;
       console.error(`[${market}] 데이터 로딩 에러:`, err);
-    } finally {
-      // 로딩 상태 해제
-      marketStates = {
-        ...marketStates,
-        [market]: {
-          ...marketStates[market],
-          isLoading: false
-        }
-      };
+      marketStates[market].isLoading = false;
     }
   }
 

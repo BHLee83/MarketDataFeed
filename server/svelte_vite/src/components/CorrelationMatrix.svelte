@@ -9,13 +9,29 @@
   const dispatch = createEventDispatcher();
   
   function getCorrelation(symbol1, symbol2) {
-    if (!correlationData || !correlationData.length) return null;
+    if (!correlationData || !Array.isArray(correlationData)) {
+        console.error('Invalid correlation data format');
+        return null;
+    }
+    
     if (symbol1 === symbol2) return 1;
     
-    const row = correlationData[symbols.indexOf(symbol1)];
-    if (!row) return null;
+    const rowIndex = symbols.indexOf(symbol1);
+    const colIndex = symbols.indexOf(symbol2);
     
-    return row[symbols.indexOf(symbol2)];
+    if (rowIndex === -1 || colIndex === -1) {
+        console.error('Symbol not found:', {symbol1, symbol2, symbols});
+        return null;
+    }
+    
+    const row = correlationData[rowIndex];
+    if (!Array.isArray(row)) {
+        console.error('Invalid row data:', row);
+        return null;
+    }
+    
+    const value = row[colIndex];
+    return typeof value === 'number' ? value : null;
   }
 
   function handleSymbolClick(symbol) {
@@ -34,6 +50,14 @@
       symbol2,
       timeframe
     });
+  }
+
+  // 상관계수 표시 셀 컴포넌트
+  function formatCorrelation(value) {
+    if (value === null || typeof value !== 'number' || isNaN(value)) {
+        return '-';
+    }
+    return value.toFixed(2);
   }
 </script>
 
@@ -58,7 +82,7 @@
                 <span class="loading">-</span>
               {:else}
                 <div style="background-color: rgba({getCorrelation(symbol1, symbol2) > 0 ? '0,255,0,' : '255,0,0,'}{Math.abs(getCorrelation(symbol1, symbol2))})">
-                  {getCorrelation(symbol1, symbol2).toFixed(2)}
+                  {formatCorrelation(getCorrelation(symbol1, symbol2))}
                 </div>
               {/if}
             </td>
