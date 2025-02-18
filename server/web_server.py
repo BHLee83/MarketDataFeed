@@ -17,6 +17,7 @@ from database.db_manager import DatabaseManager
 from datetime import datetime, timedelta
 import uuid
 from memory_store import MemoryStore
+import numpy as np
 
 app = FastAPI()
 
@@ -233,19 +234,18 @@ async def get_loading_status():
 async def get_statistics(data_type: str, timeframe: str, market: str = None, key: str = None, start: str = None, end: str = None):
     """저장소에서 통계 데이터 조회"""
     try:
-        if memory_store.loading_status[timeframe]:  # 메모리에 데이터 로딩 중인 경우
-            data = memory_store.get_statistics_data(data_type, timeframe, market, key, start, end)  # 메모리에서 통계 데이터 가져오고
-        if data is None:    # 메모리에 없는 경우 DB 확인
-            table_name = f"statistics_price_{timeframe}"
-            symbol1, symbol2 = key.split('-') if key and '-' in key else (None, None)
-            data = await db_manager.load_statistics_data_async(table_name, data_type, market, symbol1, symbol2, start, end)
-            memory_store._store_statistics_data(timeframe, data)
+        if memory_store.loading_status[timeframe]:
             data = memory_store.get_statistics_data(data_type, timeframe, market, key, start, end)
-            
-        # if data is None:
-        #     raise HTTPException(status_code=404, detail="Data not found")
-            
-        return data
+            if data:
+                return data
+            else:   # DB에서 데이터 로드
+                table_name = f"statistics_price_{timeframe}"
+                symbol1, symbol2 = key.split('-') if key and '-' in key else (None, None)
+                raw_data = await db_manager.load_statistics_data_async(table_name, data_type, market, symbol1, symbol2, start, end)
+                memory_store._store_statistics_data(timeframe, raw_data)
+                data = memory_store.get_statistics_data(data_type, timeframe, market, key, start, end)
+                return data if data else None
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -304,41 +304,10 @@ async def price_websocket_endpoint(websocket: WebSocket, timeframe: str, symbol:
     except Exception as e:
         print(f"WebSocket error: {e}")
 
-# @app.websocket("/ws/statistics/{data_type}/{timeframe}")
-# async def statistics_websocket_endpoint(websocket: WebSocket, data_type: str, timeframe: str, market: str):
-#     """통계 데이터 웹소켓 엔드포인트"""
-#     await websocket.accept()
-#     try:
-#         # 초기 데이터 전송 (메모리 저장소에서)
-#         if memory_store.loading_status[timeframe]:
-#             initial_data = memory_store.get_statistics_data(timeframe, market)
-#             if initial_data:
-#                 await websocket.send_json(initial_data)
-
-#         # Kafka 구독 및 실시간 데이터 처리
-#         consumer = _create_consumer()
-#         while True:
-#             msg = consumer.poll(1.0)
-#             if msg is None:
-#                 break
-#             if msg.error():
-#                 continue
-            
-#             data = json.loads(msg.value().decode('utf-8'))
-#             if data['type'] == data_type and data['timeframe'] == timeframe and data['market'] == market:
-#                 memory_store.update_realtime_data(data)  # 메모리 저장소 업데이트
-#                 await websocket.send_json(data)
-
-#     except WebSocketDisconnect:
-#         print(f"WebSocket disconnected: {market}")
-#     except Exception as e:
-#         print(f"WebSocket error: {e}")
 @app.websocket("/ws/statistics/{data_type}")
 async def statistics_websocket_endpoint(websocket: WebSocket, data_type: str):
-    """통계 데이터 웹소켓 엔드포인트"""
     await websocket.accept()
     try:
-        # Kafka 구독 및 실시간 데이터 처리
         consumer = create_kafka_consumer(Config.KAFKA_TOPICS['STATISTICS_DATA'], from_beginning = False)
         while True:
             msg = consumer.poll(1.0)
@@ -348,8 +317,19 @@ async def statistics_websocket_endpoint(websocket: WebSocket, data_type: str):
             
             data = json.loads(msg.value().decode('utf-8'))
             memory_store.update_realtime_data(data)  # 메모리 저장소 업데이트
+            
             if data['type'] == data_type:
-                await websocket.send_json(data)
+                # numpy 배열을 리스트로 변환하여 전송
+                processed_data = {
+                    'trd_date': data['trd_date'].tolist() if isinstance(data['trd_date'], np.ndarray) else data['trd_date'],
+                    'trd_time': data['trd_time'].tolist() if isinstance(data['trd_time'], np.ndarray) else data['trd_time'],
+                    'value1': data['value1'].tolist() if isinstance(data['value1'], np.ndarray) else data['value1'],
+                    'value2': data['value2'].tolist() if isinstance(data['value2'], np.ndarray) else data['value2'],
+                    'type': data['type'],
+                    'symbol1': data['symbol1'],
+                    'symbol2': data['symbol2']
+                }
+                await websocket.send_json(processed_data)
 
     except WebSocketDisconnect:
         print(f"WebSocket disconnected")
