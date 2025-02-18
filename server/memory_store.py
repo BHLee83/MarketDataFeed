@@ -3,11 +3,34 @@ from datetime import datetime, timedelta
 import asyncio
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
+import numpy as np
+
+@dataclass
+class StatisticsData:
+    trd_date: np.ndarray
+    trd_time: np.ndarray
+    value1: np.ndarray
+    value2: np.ndarray
+    type: str
+    symbol1: str
+    symbol2: str
+
+@dataclass
+class PriceData:
+    trd_date: np.ndarray
+    trd_time: np.ndarray
+    open: np.ndarray
+    high: np.ndarray
+    low: np.ndarray
+    close: np.ndarray
+    volume: np.ndarray
+    symbol: str
 
 class MemoryStore:
     def __init__(self):
-        self.statistics_data = defaultdict(lambda: defaultdict(dict))  # timeframe -> market -> key -> data
-        self.price_data = defaultdict(lambda: defaultdict(list))      # timeframe -> symbol -> data
+        self.statistics_data = {}  # {timeframe: {market: {key: data}}}
+        self.price_data = {}      # {timeframe: {symbol: data}}
         self.meta_data = []
         self.loading_status = defaultdict(bool)
         self.last_update = defaultdict(datetime.now)
@@ -42,8 +65,8 @@ class MemoryStore:
 
     async def _background_loading(self, db_manager):
         """백그라운드 데이터 로딩"""
-        # timeframes = ['1d', '30m', '15m', '10m', '5m', '3m', '1m']
-        timeframes = ['1d'] # 임시로 일봉만 로드
+        timeframes = ['1d', '30m', '15m', '10m', '5m', '3m', '1m']
+        # timeframes = ['1d'] # 임시로 일봉만 로드
         
         # 날짜 범위 설정 (최근 1주)
         total_days = 5
@@ -83,6 +106,8 @@ class MemoryStore:
             current_end = current_start
             total_days -= chunk_size
 
+        self.logger.info("백그라운드 데이터 로딩 완료")
+
     async def _load_timeframe_data(self, db_manager, timeframe: str, start_date: str, end_date: str):
         """타임프레임별 데이터 로드"""
         try:
@@ -115,48 +140,137 @@ class MemoryStore:
     def _store_statistics_data(self, timeframe: str, data: List[Dict]):
         """통계 데이터 저장"""
         try:
+            if timeframe not in self.statistics_data:
+                self.statistics_data[timeframe] = {}
+            
             for item in data:
                 market = item['market']
+                data_type = item['type']
                 key = f"{item['symbol1']}-{item['symbol2']}"
-                if key not in self.statistics_data[timeframe][market]:
-                    self.statistics_data[timeframe][market][key] = []
-                self.statistics_data[timeframe][market][key].append(item)
+                
+                if market not in self.statistics_data[timeframe]:
+                    self.statistics_data[timeframe][market] = {}
+                if data_type not in self.statistics_data[timeframe][market]:
+                    self.statistics_data[timeframe][market][data_type] = {}
+                
+                # 기존 데이터가 있는 경우 업데이트 또는 추가
+                if key in self.statistics_data[timeframe][market][data_type]:
+                    existing_data = self.statistics_data[timeframe][market][data_type][key]
+                    
+                    # 날짜/시간이 같은 데이터가 있는지 확인
+                    if timeframe == '1d':
+                        mask = existing_data.trd_date == item['trd_date']
+                    else:
+                        mask = (existing_data.trd_date == item['trd_date']) & (existing_data.trd_time == item.get('trd_time', 0))
+                    
+                    if np.any(mask):
+                        # 기존 데이터 업데이트
+                        existing_data.value1[mask] = item['value1']
+                        existing_data.value2[mask] = item['value2']
+                    else:
+                        # 새로운 데이터 추가
+                        existing_data.trd_date = np.append(existing_data.trd_date, item['trd_date'])
+                        existing_data.trd_time = np.append(existing_data.trd_time, item.get('trd_time', 0))
+                        existing_data.value1 = np.append(existing_data.value1, item['value1'])
+                        existing_data.value2 = np.append(existing_data.value2, item['value2'])
+                else:
+                    # 새로운 데이터 생성
+                    self.statistics_data[timeframe][market][data_type][key] = StatisticsData(
+                        trd_date=np.array([item['trd_date']]),
+                        trd_time=np.array([item.get('trd_time', 0)]),
+                        value1=np.array([item['value1']]),
+                        value2=np.array([item['value2']]),
+                        type=data_type,
+                        symbol1=item['symbol1'],
+                        symbol2=item['symbol2']
+                    )
+                
         except Exception as e:
             self.logger.error(f"통계 데이터 저장 중 오류: {e}")
 
     def _store_price_data(self, timeframe: str, data: List[Dict]):
         """가격 데이터 저장"""
         try:
+            # timeframe이 없으면 초기화
+            if timeframe not in self.price_data:
+                self.price_data[timeframe] = {}
+            
+            # 심볼별로 데이터 그룹화
             for item in data:
                 symbol = item['symbol']
-                if symbol not in self.price_data[timeframe]:
-                    self.price_data[timeframe][symbol] = []
-                self.price_data[timeframe][symbol].append(item)
+                
+                if symbol in self.price_data[timeframe]:
+                    # 기존 데이터가 있는 경우 병합
+                    existing_data = self.price_data[timeframe][symbol]
+                    
+                    # 새로운 데이터 추가
+                    trd_date = np.append(existing_data.trd_date, item['trd_date'])
+                    trd_time = np.append(existing_data.trd_time, item.get('trd_time', 0))
+                    open_price = np.append(existing_data.open, item['open'])
+                    high_price = np.append(existing_data.high, item['high'])
+                    low_price = np.append(existing_data.low, item['low'])
+                    close_price = np.append(existing_data.close, item['close'])
+                    volume = np.append(existing_data.volume, item.get('volume', 0))
+                    
+                    self.price_data[timeframe][symbol] = PriceData(
+                        trd_date=trd_date,
+                        trd_time=trd_time,
+                        open=open_price,
+                        high=high_price,
+                        low=low_price,
+                        close=close_price,
+                        volume=volume,
+                        symbol=symbol
+                    )
+                else:
+                    # 새로운 데이터 생성
+                    self.price_data[timeframe][symbol] = PriceData(
+                        trd_date=np.array([item['trd_date']]),
+                        trd_time=np.array([item.get('trd_time', 0)]),
+                        open=np.array([item['open']]),
+                        high=np.array([item['high']]),
+                        low=np.array([item['low']]),
+                        close=np.array([item['close']]),
+                        volume=np.array([item.get('volume', 0)]),
+                        symbol=symbol
+                    )
+            
         except Exception as e:
             self.logger.error(f"가격 데이터 저장 중 오류: {e}")
 
     def get_statistics_data(self, data_type: str, timeframe: str, market: str = None, key: str = None, start_date: str = None, end_date: str = None):
         """통계 데이터 조회"""
         try:
-            if market and market in self.statistics_data[timeframe]:
-                data = {f'{key}': self.statistics_data[timeframe][market][key]} if key else self.statistics_data[timeframe][market]
-                
-                # 필터링
-                if data_type or start_date or end_date:
-                    filtered_data = {}
-                    for k, items in data.items():
-                        values = []
-                        for item in items:
-                            item_date = str(item['trd_date'])
-                            if (item['type'] == data_type) and (not start_date or item_date >= start_date) and \
-                            (not end_date or item_date <= end_date):
-                                values.append(item)
-                        if values:
-                            filtered_data[k] = values
-                    return filtered_data if filtered_data else None
-                
-                return data
-            return None
+            if timeframe not in self.statistics_data or market not in self.statistics_data[timeframe]:
+                return None
+            
+            data = {f'{key}': self.statistics_data[timeframe][market][key]} if key else self.statistics_data[timeframe][market]
+            if data_type:
+                data = data[data_type]
+            
+            # 필터링
+            if data_type or start_date or end_date:
+                filtered_data = {}
+                for k, stat_data in data.items():
+                    # numpy 마스크를 사용하여 날짜 필터링
+                    mask = np.ones(len(stat_data.trd_date), dtype=bool)
+                    if start_date:
+                        mask &= (stat_data.trd_date.astype(np.int64) >= int(start_date))
+                    if end_date:
+                        mask &= (stat_data.trd_date.astype(np.int64) <= int(end_date))
+
+                    if np.any(mask):
+                        filtered_data[k] = {
+                            'trd_date': stat_data.trd_date[mask].tolist(),
+                            'trd_time': stat_data.trd_time[mask].tolist(),
+                            'value1': stat_data.value1[mask].tolist(),
+                            'value2': stat_data.value2[mask].tolist(),
+                            'type': stat_data.type,
+                            'symbol1': stat_data.symbol1,
+                            'symbol2': stat_data.symbol2
+                        }
+                return filtered_data if filtered_data else None
+            
         except Exception as e:
             self.logger.error(f"데이터 조회 중 오류: {e}")
             return None
@@ -184,80 +298,51 @@ class MemoryStore:
             market = data.get('market')
             type = data.get('type')
             
-            if type == 'spread' or type.startswith('corr'):
+            if type:
                 key = f"{data['symbol1']}-{data['symbol2']}"
                 
-                # 해당 키가 없으면 리스트 초기화
+                if market not in self.statistics_data[timeframe]:
+                    self.statistics_data[timeframe][market] = {}
+                
                 if key not in self.statistics_data[timeframe][market]:
-                    self.statistics_data[timeframe][market][key] = []
-                
-                # 기존 데이터 중 동일한 시간의 데이터가 있는지 확인
-                existing_data = None
-                for idx, item in enumerate(self.statistics_data[timeframe][market][key]):
-                    if timeframe == '1d':
-                        # 일봉은 날짜만 비교
-                        if item['trd_date'] == data['trd_date']:
-                            existing_data = (idx, item)
-                            break
-                    else:
-                        # 분봉은 날짜와 시간 모두 비교
-                        if item['trd_date'] == data['trd_date'] and item['trd_time'] == data['trd_time']:
-                            existing_data = (idx, item)
-                            break
-                
-                if existing_data:
-                    # 동일한 시간의 데이터가 있으면 업데이트
-                    idx, _ = existing_data
-                    self.statistics_data[timeframe][market][key][idx] = data
+                    # 새로운 StatisticsData 객체 생성
+                    self.statistics_data[timeframe][market][key] = StatisticsData(
+                        trd_date=np.array([data['trd_date']]),
+                        trd_time=np.array([data.get('trd_time', 0)]),
+                        value1=np.array([data['value1']]),
+                        value2=np.array([data['value2']]),
+                        type=data['type'],
+                        symbol1=data['symbol1'],
+                        symbol2=data['symbol2']
+                    )
                 else:
-                    # 새로운 데이터면 추가
-                    self.statistics_data[timeframe][market][key].append(data)
-                
-                # 타임프레임에 따라 다른 정렬 기준 적용
-                # if timeframe == '1d':
-                #     # 일봉은 날짜만으로 정렬
-                #     self.statistics_data[timeframe][market][key].sort(
-                #         key=lambda x: int(x['trd_date'])
-                #     )
-                # else:
-                #     # 분봉은 날짜와 시간으로 정렬
-                #     self.statistics_data[timeframe][market][key].sort(
-                #         key=lambda x: (int(x['trd_date']), int(x['trd_time'].strip() or '0'))
-                #     )
-                
-            else:
-                # 가격 데이터도 동일한 로직 적용
-                symbol = data.get('symbol')
-                if symbol not in self.price_data[timeframe]:
-                    self.price_data[timeframe][symbol] = []
-                
-                existing_data = None
-                for idx, item in enumerate(self.price_data[timeframe][symbol]):
+                    stat_data = self.statistics_data[timeframe][market][key]
+                    # 기존 데이터에서 동일한 시간의 데이터가 있는지 확인
                     if timeframe == '1d':
-                        if item['trd_date'] == data['trd_date']:
-                            existing_data = (idx, item)
-                            break
+                        mask = stat_data.trd_date == data['trd_date']
                     else:
-                        if item['trd_date'] == data['trd_date'] and item['trd_time'] == data['trd_time']:
-                            existing_data = (idx, item)
-                            break
+                        mask = (stat_data.trd_date == data['trd_date']) & (stat_data.trd_time == data['trd_time'])
+
+                    mask &= (stat_data.type == type)
                     
-                if existing_data:
-                    idx, _ = existing_data
-                    self.price_data[timeframe][symbol][idx] = data
-                else:
-                    self.price_data[timeframe][symbol].append(data)
-                
-                # 타임프레임에 따라 다른 정렬 기준 적용
-                # if timeframe == '1d':
-                #     self.price_data[timeframe][symbol].sort(
-                #         key=lambda x: int(x['trd_date'])
-                #     )
-                # else:
-                #     self.price_data[timeframe][symbol].sort(
-                #         key=lambda x: (int(x['trd_date']), int(x['trd_time'].strip() or '0'))
-                #     )
-                
+                    if np.any(mask):
+                        # 기존 데이터 업데이트
+                        stat_data.value1[mask] = data['value1']
+                        stat_data.value2[mask] = data['value2']
+                    else:
+                        # 새로운 데이터 추가
+                        stat_data.trd_date = np.append(stat_data.trd_date, data['trd_date'])
+                        stat_data.trd_time = np.append(stat_data.trd_time, data.get('trd_time', 0))
+                        stat_data.value1 = np.append(stat_data.value1, data['value1'])
+                        stat_data.value2 = np.append(stat_data.value2, data['value2'])
+                        
+                        # 정렬
+                        sort_idx = np.lexsort((stat_data.trd_time, stat_data.trd_date))
+                        stat_data.trd_date = stat_data.trd_date[sort_idx]
+                        stat_data.trd_time = stat_data.trd_time[sort_idx]
+                        stat_data.value1 = stat_data.value1[sort_idx]
+                        stat_data.value2 = stat_data.value2[sort_idx]
+            
             self.last_update[timeframe] = datetime.now()
         except Exception as e:
             self.logger.error(f"실시간 데이터 업데이트 중 오류: {e}") 
