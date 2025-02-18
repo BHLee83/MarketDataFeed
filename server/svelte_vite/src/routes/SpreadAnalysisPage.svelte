@@ -10,11 +10,23 @@
   let isLoading = false;
   let error = null;
 
+  const timeFrames = [
+    { value: '1m', label: '1분' },
+    { value: '3m', label: '3분' },
+    { value: '5m', label: '5분' },
+    { value: '10m', label: '10분' },
+    { value: '15m', label: '15분' },
+    { value: '30m', label: '30분' },
+    { value: '1d', label: '1일' }
+  ]
+
   const dateRanges = [
     { value: 'today', label: '오늘' },
     { value: '1d', label: '1일' },
     { value: '1w', label: '1주일' },
-    { value: '1m', label: '1개월' }
+    { value: '1m', label: '1개월' },
+    { value: '1y', label: '1년' },
+    { value: 'All', label: '전체' }
   ];
 
   // 마켓별 상태 관리
@@ -70,13 +82,31 @@
       state.isLoading = true;
       
       const { start, end } = await calculateDateRange(state.selectedDateRange);
-      const data = await fetchStatisticsData('spread', state.selectedTimeframe, market, null, start, end);
-      
-      // 스프레드 데이터를 차트 형식으로 변환
-      state.spreadCharts = Object.entries(data).map(([key, values]) => ({
-        key,
-        data: values
-      }));
+      const data = await fetchStatisticsData(
+        'spread',
+        state.selectedTimeframe, 
+        market, 
+        null, 
+        start, 
+        end
+      );
+
+      if (data) {
+        state.spreadCharts = Object.entries(data).map(([key, values]) => {
+          // 데이터 형식 검증 및 변환
+          const processedValues = Array.isArray(values) ? values : [values];
+          return {
+            key,
+            data: processedValues.map(item => ({
+              ...item,
+              trd_date: item.trd_date,
+              trd_time: item.trd_time,
+              value1: item.value1,
+              value2: item.value2
+            }))
+          };
+        });
+      }
 
       marketStates[market] = { ...state, isLoading: false };
     } catch (err) {
@@ -86,21 +116,24 @@
   }
 
   // 데이터 구조 통일
-  function mergeSpreadData(oldData, data) {
+  function mergeSpreadData(oldData = {}, data) {
     console.log('mergeSpreadData 입력:', { oldData, data });
     
-    Object.keys(data).forEach(key => {
-      const items = data[key];
-      // 날짜, 시간 기준으로 정렬
-      items.sort((a, b) => {
-        const dateA = parseInt(a.trd_date);
-        const dateB = parseInt(b.trd_date);
-        if (dateA !== dateB) return dateA - dateB;
-        return parseInt(a.trd_time || '0') - parseInt(b.trd_time || '0');
-      });
-      
-      const lastItem = items[items.length - 1];
-      oldData[key] = lastItem;
+    Object.entries(data).forEach(([key, value]) => {
+        if (!Array.isArray(value)) {
+            oldData[key] = value;
+            return;
+        }
+        
+        const items = [...value];
+        items.sort((a, b) => {
+            const dateA = parseInt(a.trd_date);
+            const dateB = parseInt(b.trd_date);
+            if (dateA !== dateB) return dateA - dateB;
+            return parseInt(a.trd_time || '0') - parseInt(b.trd_time || '0');
+        });
+        
+        oldData[key] = items[items.length - 1];
     });
 
     return oldData;
@@ -233,15 +266,20 @@
           <select 
             bind:value={marketStates[market].selectedTimeframe}
             disabled={marketStates[market].isLoading}
-            on:change={() => handleTimeframeChange(market)}
+            on:change={() => loadMarketData(market)}
           >
-            <option value="1m">1분</option>
-            <option value="3m">3분</option>
-            <option value="5m">5분</option>
-            <option value="10m">10분</option>
-            <option value="15m">15분</option>
-            <option value="30m">30분</option>
-            <option value="1d">1일</option>
+            {#each timeFrames as frame}
+              <option value={frame.value}>{frame.label}</option>
+            {/each}
+          </select>
+          <select
+            bind:value={marketStates[market].selectedDateRange}
+            disabled={marketStates[market].isLoading}
+            on:change={() => loadMarketData(market)}
+          >
+            {#each dateRanges as range}
+              <option value={range.value}>{range.label}</option>
+            {/each}
           </select>
         </div>
       </div>
@@ -316,10 +354,10 @@
 
   .charts-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);  /* 4개의 열로 변경 */
-    gap: 10px;
+    grid-template-columns: repeat(5, 1fr);  /* 4개의 열로 변경 */
+    /* gap: 10px; */
     overflow-x: auto;
-    padding: 10px;
+    /* padding: 10px; */
   }
 
   .chart-item {
@@ -332,6 +370,7 @@
 
   .chart-title {
     font-size: 12px;
+    font-weight: bold;
     text-align: center;
     margin-bottom: 5px;
   }

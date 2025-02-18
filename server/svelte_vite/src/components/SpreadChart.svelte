@@ -11,7 +11,7 @@
   let height = 0;
   let resizeObserver;
 
-  const margin = { top: 20, right: 50, bottom: 40, left: 60 };
+  const margin = { top: 20, right: 50, bottom: 60, left: 40 };
 
   function getTimeFormat() {
     return timeframe === '1d' ? d3.timeFormat("%y/%m/%d") : d3.timeFormat("%m/%d %H:%M");
@@ -43,8 +43,8 @@
 
     const chartData = processData(spreadData);
     
-    const x = d3.scaleTime()
-      .domain(d3.extent(chartData, d => d.date))
+    const x = d3.scaleLinear()
+      .domain([0, chartData.length - 1])
       .range([0, width]);
 
     const y = d3.scaleLinear()
@@ -59,9 +59,17 @@
     svg.append("g")
       .attr("transform", `translate(0,${height})`)
       .call(d3.axisBottom(x)
-        .ticks(5)
-        .tickFormat(getTimeFormat()))
-      .selectAll("text")  // x축 레이블 회전
+        .ticks(Math.min(
+          chartData.length,
+          Math.floor(width / 40)  // 레이블당 최소 40px 공간 확보
+        ))
+        .tickFormat(i => {
+          if (i >= 0 && i < chartData.length) {
+            return getTimeFormat()(chartData[Math.floor(i)].date);
+          }
+          return '';
+        }))
+      .selectAll("text")
       .style("text-anchor", "end")
       .attr("dx", "-.8em")
       .attr("dy", ".15em")
@@ -89,7 +97,7 @@
 
     // 라인 생성 및 그리기
     const line = d3.line()
-      .x(d => x(d.date))
+      .x((d, i) => x(i))
       .y(d => y(d.value))
       .defined(d => !isNaN(d.value));
 
@@ -102,16 +110,26 @@
       .attr("d", line);
 
     // 최대/최소값 점 표시
-    const maxPoint = chartData.slice(0, -1).reduce((max, p) => p.value > max.value ? p : max);
-    const minPoint = chartData.slice(0, -1).reduce((min, p) => p.value < min.value ? p : min);
+    if (chartData.length > 0) {
+        const maxPoint = chartData.slice(0, -1).reduce((max, p) => p.value > max.value ? p : max, chartData[0]);
+        const minPoint = chartData.slice(0, -1).reduce((min, p) => p.value < min.value ? p : min, chartData[0]);
 
-    [maxPoint, minPoint].forEach(point => {
-      svg.append("circle")
-        .attr("cx", x(point.date))
-        .attr("cy", y(point.value))
-        .attr("r", 4)
-        .style("fill", point === maxPoint ? "#4CAF50" : "#f44336");
-    });
+        [maxPoint, minPoint].forEach((point, i) => {
+            const pointIndex = chartData.indexOf(point);  // 해당 포인트의 인덱스 찾기
+            svg.append("circle")
+                .attr("cx", x(pointIndex))  // 인덱스 기반 x 좌표
+                .attr("cy", y(point.value))
+                .attr("r", 3)
+                .attr("fill", point === maxPoint ? "#f44336" : "#2196F3");
+
+            svg.append("text")
+                .attr("x", x(pointIndex))  // 인덱스 기반 x 좌표
+                .attr("y", y(point.value) - 10)
+                .attr("text-anchor", "middle")
+                .attr("font-size", "10px")
+                .text(point.value.toFixed(2));
+        });
+    }
 
     // 현재값 표시
     const lastPoint = chartData[chartData.length - 1];
@@ -139,57 +157,77 @@
     // 인터랙티브 영역
     svg.append("rect")
       .attr("class", "overlay")
-      .attr("width", width+1)
+      .attr("width", width)
       .attr("height", height)
-      .style("opacity", 0)
+      .attr("fill", "none")
+      .attr("pointer-events", "all")
       .on("mousemove", function(event) {
-        const [xPos] = d3.pointer(event, this);
-        const bisect = d3.bisector(d => d.date).left;
-        const x0 = x.invert(xPos);
-        const i = bisect(chartData, x0, 1);
-        const d0 = chartData[i - 1];
-        const d1 = chartData[i];
-        const d = x0 - d0.date > d1.date - x0 ? d1 : d0;
+        const [xPos, yPos] = d3.pointer(event, this);
+        const i = Math.round(x.invert(xPos));  // 인덱스로 직접 변환
+        
+        if (i < 0 || i >= chartData.length) return;
 
-        tooltipDiv.style("opacity", 1)
-          .html(`${timeframe === '1d' ? 
-            d.date.toLocaleDateString() : 
-            `${d.date.toLocaleDateString()} ${d.date.toLocaleTimeString()}`
-          }<br/>값: ${d.value.toFixed(2)}`)
-          .style("left", `${event.pageX + 5}px`)
-          .style("top", `${event.pageY + 5}px`);
+        const d = chartData[i];  // 해당 인덱스의 데이터 직접 사용
+
+        tooltipDiv
+          .style("opacity", 1)
+          .style("left", (event.pageX + 5) + "px")  // 마우스 x 포지션 사용  
+          .style("top", (event.pageY + 5) + "px")  // 마우스 y 포지션 사용
+          .html(`${getTimeFormat()(d.date)}<br>${d.value.toFixed(2)}`);
       })
-      .on("mouseout", () => tooltipDiv.style("opacity", 0));
+      .on("mouseleave", function() {
+        tooltipDiv.style("opacity", 0);
+      });
   }
 
   function processData(rawData) {
+    if (!Array.isArray(rawData)) {
+        console.error('Invalid data format:', rawData);
+        return [];
+    }
+    
     return rawData.map(item => {
-      try {
-        const cleanDate = item.trd_date.toString().padStart(8, '0');
-        const timeStr = item.trd_time ? item.trd_time.toString().padStart(4, '0') : '0000';
-        
-        const year = parseInt(cleanDate.substring(0, 4));
-        const month = parseInt(cleanDate.substring(4, 6)) - 1;
-        const day = parseInt(cleanDate.substring(6, 8));
-        const hour = parseInt(timeStr.substring(0, 2));
-        const minute = parseInt(timeStr.substring(2, 4));
-        
-        const date = new Date(year, month, day, hour, minute);
-        
-        return {
-          date,
-          dateTime: `${cleanDate}-${timeStr}`,
-          value: parseFloat(item.value1),
-          symbol1: item.symbol1,
-          symbol2: item.symbol2
-        };
-      } catch (error) {
-        console.error('Data processing error:', error, item);
-        return null;
-      }
+        try {
+            if (!item || !Array.isArray(item.trd_date)) {
+                console.error('Invalid item format:', item);
+                return null;
+            }
+
+            // 배열의 각 요소에 대해 날짜 객체 생성
+            return item.trd_date.map((date, index) => {
+                const trd_time = item.trd_time[index] || 0;
+                const value = item.value1[index];
+
+                // 날짜 문자열 생성
+                const dateStr = String(date);
+                const timeStr = String(trd_time).padStart(4, '0');
+                
+                const dateObj = new Date(
+                    parseInt(dateStr.substring(0, 4)),
+                    parseInt(dateStr.substring(4, 6)) - 1,
+                    parseInt(dateStr.substring(6, 8)),
+                    parseInt(timeStr.substring(0, 2)),
+                    parseInt(timeStr.substring(2, 4))
+                );
+
+                if (isNaN(dateObj.getTime())) {
+                    console.error('Invalid date:', {date, trd_time});
+                    return null;
+                }
+
+                return {
+                    date: dateObj,
+                    value: value
+                };
+            });
+        } catch (error) {
+            console.error('Data processing error:', error, item);
+            return null;
+        }
     })
-    .filter(item => item !== null && !isNaN(item.value))
-    .sort((a, b) => a.date - b.date);
+    .flat()
+    .filter(item => item !== null)
+    .sort((a, b) => a.date.getTime() - b.date.getTime());  // 날짜 오름차순 정렬
   }
 
   // 데이터나 타임프레임이 변경될 때마다 차트 갱신
