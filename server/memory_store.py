@@ -281,22 +281,27 @@ class MemoryStore:
                 'last_load': {}
             }
 
-    def update_realtime_data(self, data: Dict):
+    def update_stat_data(self, data: List[Dict]):
         """실시간 데이터 업데이트"""
         try:
             timeframe = data.get('timeframe')
             market = data.get('market')
-            type = data.get('type')
+            data_type = data.get('type')
             
-            if type:
+            if timeframe not in self.statistics_data:
+                self.statistics_data[timeframe] = {}
+
+            if data_type:
                 key = f"{data['symbol1']}-{data['symbol2']}"
                 
                 if market not in self.statistics_data[timeframe]:
                     self.statistics_data[timeframe][market] = {}
+                if data_type not in self.statistics_data[timeframe][market]:
+                    self.statistics_data[timeframe][market][data_type] = {}
                 
-                if key not in self.statistics_data[timeframe][market]:
+                if key not in self.statistics_data[timeframe][market][data_type]:
                     # 새로운 StatisticsData 객체 생성
-                    self.statistics_data[timeframe][market][key] = StatisticsData(
+                    self.statistics_data[timeframe][market][data_type][key] = StatisticsData(
                         trd_date=np.array([data['trd_date']]),
                         trd_time=np.array([data.get('trd_time', 0)]),
                         value1=np.array([data['value1']]),
@@ -306,14 +311,14 @@ class MemoryStore:
                         symbol2=data['symbol2']
                     )
                 else:
-                    stat_data = self.statistics_data[timeframe][market][key]
+                    stat_data = self.statistics_data[timeframe][market][data_type][key]
                     # 기존 데이터에서 동일한 시간의 데이터가 있는지 확인
                     if timeframe == '1d':
                         mask = stat_data.trd_date == data['trd_date']
                     else:
                         mask = (stat_data.trd_date == data['trd_date']) & (stat_data.trd_time == data['trd_time'])
 
-                    mask &= (stat_data.type == type)
+                    mask &= (stat_data.type == data_type)
                     
                     if np.any(mask):
                         # 기존 데이터 업데이트
@@ -332,7 +337,7 @@ class MemoryStore:
                         stat_data.trd_time = stat_data.trd_time[sort_idx]
                         stat_data.value1 = stat_data.value1[sort_idx]
                         stat_data.value2 = stat_data.value2[sort_idx]
-            
+                
             self.last_update[timeframe] = datetime.now()
         except Exception as e:
             self.logger.error(f"실시간 데이터 업데이트 중 오류: {e}") 

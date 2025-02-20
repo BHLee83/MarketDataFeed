@@ -226,6 +226,29 @@
     marketStates = marketStates;  // Svelte 반응성 트리거
   }
 
+  // 웹소켓 데이터 처리 함수
+  function handleWebSocketData(data) {
+    const market = data.market;
+    const timeframe = data.timeframe;
+    const pair = `${data.symbol1}-${data.symbol2}`;
+    
+    // 해당 마켓의 차트 데이터 업데이트
+    if (marketStates[market]) {
+      // 1분봉 데이터인 경우에만 모든 타임프레임에 대해 처리
+      if (timeframe === '1m') {
+        const chartIndex = marketStates[market].spreadCharts.findIndex(c => c.key === pair);
+        if (chartIndex >= 0) {
+          const chart = marketStates[market].spreadCharts[chartIndex];
+          chart.data = [...chart.data, {
+            ...data,
+            isUpdated: true  // 업데이트 플래그 추가
+          }];
+          marketStates = marketStates; // Svelte 반응성 트리거
+        }
+      }
+    }
+  }
+
   onMount(() => {
     console.log('컴포넌트 마운트 시작');
     
@@ -239,7 +262,15 @@
         await loadMarketData(market);
       }
       console.log('웹소켓 연결 설정');
-      setupWebSocket();
+      
+      // 웹소켓 설정 후 이벤트 리스너 추가
+      statisticsWs = connectStatisticsWebSocket('spread');
+      if (statisticsWs) {
+        statisticsWs.addEventListener('message', (event) => {
+          const data = JSON.parse(event.data);
+          handleWebSocketData(data);
+        });
+      }
     })();
 
     return () => {

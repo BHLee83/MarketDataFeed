@@ -347,9 +347,9 @@ async def statistics_websocket_endpoint(websocket: WebSocket, data_type: str):
                 continue
             
             data = json.loads(msg.value().decode('utf-8'))
-            memory_store.update_realtime_data(data)  # 메모리 저장소 업데이트
             if data['type'] == data_type:
                 await websocket.send_json(data)
+            memory_store.update_stat_data(data)  # 메모리 저장소 업데이트
 
     except WebSocketDisconnect:
         print(f"WebSocket disconnected")

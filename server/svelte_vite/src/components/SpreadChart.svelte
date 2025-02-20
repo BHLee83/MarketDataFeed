@@ -10,6 +10,8 @@
   let width = 0;
   let height = 0;
   let resizeObserver;
+  let isUpdated = false;
+  let updateTimer;
 
   const margin = { top: 20, right: 50, bottom: 60, left: 40 };
 
@@ -186,26 +188,26 @@
         return [];
     }
     
-    return rawData.map(item => {
+    // 먼저 모든 데이터 포인트를 생성
+    const processedData = rawData.map(item => {
         try {
-            if (!item || !Array.isArray(item.trd_date)) {
-                console.error('Invalid item format:', item);
-                return null;
-            }
+            if (!item) return null;
 
-            // 배열의 각 요소에 대해 날짜 객체 생성
-            return item.trd_date.map((date, index) => {
-                const trd_time = item.trd_time[index] || 0;
-                const value = item.value1[index];
+            const dates = Array.isArray(item.trd_date) ? item.trd_date : [item.trd_date];
+            const times = Array.isArray(item.trd_time) ? item.trd_time : [item.trd_time];
+            const values = Array.isArray(item.value1) ? item.value1 : [item.value1];
 
-                // 날짜 문자열 생성
-                const dateStr = String(date);
+            return dates.map((date, index) => {
+                const trd_time = times[index] || 0;
+                const value = values[index];
                 const timeStr = String(trd_time).padStart(4, '0');
-                
+                const minutes = parseInt(timeStr.substring(0, 2)) * 60 + 
+                              parseInt(timeStr.substring(2, 4));
+
                 const dateObj = new Date(
-                    parseInt(dateStr.substring(0, 4)),
-                    parseInt(dateStr.substring(4, 6)) - 1,
-                    parseInt(dateStr.substring(6, 8)),
+                    parseInt(String(date).substring(0, 4)),
+                    parseInt(String(date).substring(4, 6)) - 1,
+                    parseInt(String(date).substring(6, 8)),
                     parseInt(timeStr.substring(0, 2)),
                     parseInt(timeStr.substring(2, 4))
                 );
@@ -217,7 +219,8 @@
 
                 return {
                     date: dateObj,
-                    value: value
+                    value: value,
+                    minutes: minutes
                 };
             });
         } catch (error) {
@@ -225,15 +228,87 @@
             return null;
         }
     })
+    .filter(Boolean)
     .flat()
-    .filter(item => item !== null)
-    .sort((a, b) => a.date.getTime() - b.date.getTime());  // 날짜 오름차순 정렬
+    .sort((a, b) => a.date - b.date);
+
+    // 실시간 데이터(1분봉) 처리 및 통합
+    if (rawData.length > 0 && rawData[rawData.length - 1].timeframe === '1m') {
+        const tfMinutes = timeframe === '1d' ? 1440 : parseInt(timeframe.replace('m', ''));
+        const groupedData = new Map();
+        
+        processedData.forEach(point => {
+            if (timeframe === '1d') {
+                const dateKey = point.date.toISOString().split('T')[0];
+                const existingPoint = groupedData.get(dateKey);
+                
+                if (!existingPoint || point.date > existingPoint.date) {
+                    groupedData.set(dateKey, {
+                        ...point,
+                        isUpdated: point.isUpdated
+                    });
+                }
+            } else {
+                // 현재 시간을 타임프레임의 끝으로 조정
+                const targetMinutes = Math.ceil(point.minutes / tfMinutes) * tfMinutes;
+                const dateKey = `${point.date.toISOString().split('T')[0]}-${targetMinutes}`;
+                
+                // 해당 타임프레임의 시작 시간 계산
+                const frameStartMinutes = targetMinutes - tfMinutes;
+                
+                // 현재 데이터의 시간이 해당 타임프레임 구간에 속하는 경우에만 처리
+                if (point.minutes > frameStartMinutes && point.minutes <= targetMinutes) {
+                    const existingPoint = groupedData.get(dateKey);
+                    if (!existingPoint || point.date > existingPoint.date) {
+                        const adjustedDate = new Date(point.date);
+                        adjustedDate.setMinutes(Math.floor(targetMinutes % 60));
+                        adjustedDate.setHours(Math.floor(targetMinutes / 60));
+                        
+                        groupedData.set(dateKey, {
+                            ...point,
+                            date: adjustedDate,
+                            minutes: targetMinutes,
+                            isUpdated: point.isUpdated
+                        });
+                    }
+                }
+            }
+        });
+
+        return Array.from(groupedData.values())
+            .sort((a, b) => a.date - b.date);
+    }
+
+    return processedData;
   }
 
   // 데이터나 타임프레임이 변경될 때마다 차트 갱신
   $: if (spreadData || timeframe || dateRange) {
     if (chartContainer) {
-        updateChart();
+      updateChart();
+      // // 데이터 업데이트 시 하이라이트 효과
+      // isUpdated = true;
+      // setTimeout(() => {
+      //   isUpdated = false;
+      // }, 1000);
+    }
+  }
+
+  // 데이터 변경 감지
+  $: {
+    if (spreadData && spreadData.length > 0) {
+      const lastData = spreadData[spreadData.length - 1];
+      if (lastData.isUpdated) {
+        // 이전 타이머 제거
+        if (updateTimer) clearTimeout(updateTimer);
+        
+        isUpdated = true;
+        updateTimer = setTimeout(() => {
+          isUpdated = false;
+          // 플래그 초기화
+          lastData.isUpdated = false;
+        }, 1000);
+      }
     }
   }
 
@@ -250,7 +325,7 @@
   });
 </script>
 
-<div bind:this={chartContainer} class="chart-container">
+<div bind:this={chartContainer} class="chart-container" class:updated={isUpdated}>
   {#if !spreadData || spreadData.length === 0}
     <div class="no-data">데이터 없음</div>
   {/if}
@@ -262,6 +337,11 @@
     height: 100%;
     /* position: relative; */
     min-height: 150px;
+    transition: background-color 0.3s ease;
+  }
+
+  .updated {
+    background-color: rgba(33, 150, 243, 0.1);
   }
 
   .no-data {

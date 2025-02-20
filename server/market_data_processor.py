@@ -204,18 +204,18 @@ class MarketDataProcessor:
         for tf in self.timeframes:
             if tf == '1m' or tf == '1d':
                 continue
+            
             minutes = int(tf[:-1])
             if tf not in self.symbol_data[symbol]:
                 self.symbol_data[symbol][tf] = []
+            
             candles = self.symbol_data[symbol][tf]
-            current_time = int(new_candle['trd_time'])  # 'HHMM' 형식
-            # 완성 시각 계산
+            current_time = int(new_candle['trd_time'])
             currnet_minutes = (current_time // 100) * 60 + (current_time % 100)
             target_minutes = ((currnet_minutes - 1) // minutes) * minutes + minutes
-            target_time = f"{target_minutes // 60:02}{target_minutes % 60:02}"  # 'HHMM' 형식
-            last_time = int(candles[-1]['trd_time']) if candles else 0
-            last_minutes = (last_time // 100) * 60 + (last_time % 100)
-            if len(candles) == 0 or (target_minutes > last_minutes):
+            target_time = f"{target_minutes // 60:02}{target_minutes % 60:02}"
+            
+            if len(candles) == 0 or (target_minutes > int(candles[-1]['trd_time'][:2]) * 60 + int(candles[-1]['trd_time'][2:])):
                 # 새로운 캔들 시작
                 new_candle_copy = new_candle.copy()
                 new_candle_copy['trd_time'] = target_time   # 완성 시각 설정
@@ -232,6 +232,7 @@ class MarketDataProcessor:
                     data_to_send = {'symbol': symbol, 'timeframe': tf, 'data': last_candle}
                     self.kafka_handler.send_data(self.topic_min, data_to_send)
                     print("kafka의 minute topic에 전달: ", data_to_send)
+                    self.calculate_statistics(symbol, tf)  # 해당 timeframe의 통계 계산
 
 
     def update_daily_candle(self, symbol, new_candle):
@@ -300,9 +301,9 @@ class MarketDataProcessor:
                 time.sleep(1)
 
 
-    def calculate_statistics(self, symbol):
+    def calculate_statistics(self, symbol, timeframe='1m'):
         """통계 계산"""
-        self.calculate_pair(symbol)
+        self.calculate_pair(symbol, timeframe)
         # self.calculate_volume_profile()
         # self.calculate_price_levels()
         # self.calculate_moving_averages()
@@ -423,66 +424,61 @@ class MarketDataProcessor:
         return market_results
     
 
-    def calculate_pair(self, updated_symbol):
-        """실시간 데이터에 대한 통계값 계산 (변경된 심볼 기준)"""
+    def calculate_pair(self, symbol, timeframe):
+        """통계값 계산"""
         try:
-            # updated_symbol이 속한 마켓 찾기
+            # symbol이 속한 마켓 찾기
             target_market = None
             for market, symbols in self.market_symbols.items():
-                if updated_symbol in symbols:
+                if symbol in symbols:
                     target_market = market
                     break
             
             if not target_market:
-                server_logger.warning(f"Symbol not found in any market: {updated_symbol}")
+                server_logger.warning(f"Symbol not found in any market: {symbol}")
                 return
 
             topic = self.set_topic('statistics')
+            last_stat_date = self.last_stat_dates[timeframe]
+            
+            # 해당 마켓의 심볼 페어 구성
+            symbols = self.market_symbols[target_market]
+            symbol_idx = symbols.index(symbol)
+            symbol_pairs = []
+            
+            # 앞쪽 심볼들과의 페어
+            symbol_pairs.extend([(symbols[i], symbol) for i in range(symbol_idx)])
+            # 뒤쪽 심볼들과의 페어
+            symbol_pairs.extend([(symbol, symbols[i]) for i in range(symbol_idx + 1, len(symbols))])
 
-            for tf in self.timeframes:
-                if tf == '1d':
-                    continue
+            # 페어별 통계 계산
+            market_results = []
+            for symbol_i, symbol_j in symbol_pairs:
+                pair = f"{symbol_i}-{symbol_j}"
+                last_stat_time = None
 
-                market_results = []
-                last_stat_date = self.last_stat_dates[tf]
-                
-                # 해당 마켓에 대해서만 처리
-                symbols = self.market_symbols[target_market]
-                symbol_pairs = []
-                symbol_idx = symbols.index(updated_symbol)
-                
-                # 앞쪽 심볼들과의 페어
-                symbol_pairs.extend([(symbols[i], updated_symbol) for i in range(symbol_idx)])
-                # 뒤쪽 심볼들과의 페어
-                symbol_pairs.extend([(updated_symbol, symbols[i]) for i in range(symbol_idx + 1, len(symbols))])
+                if pair in self.stat_data[timeframe].keys():
+                    last_record = max(self.stat_data[timeframe][pair], 
+                                    key=lambda x: (x.get('trd_date', ''), x.get('trd_time', '')))
+                    last_stat_date, last_stat_time = last_record['trd_date'], last_record['trd_time']
 
-                # 페어별 통계 계산
-                for symbol_i, symbol_j in symbol_pairs:
-                    pair = f"{symbol_i}-{symbol_j}"
-                    last_stat_time = None
+                market_results_pair = self._calculate_pair_stat(target_market, symbol_i, symbol_j, 
+                                                              timeframe, last_stat_date, last_stat_time)
+                if market_results_pair:
+                    market_results.extend(market_results_pair)
+                    processed_data = [{
+                        'timeframe': timeframe,
+                        **data
+                    } for data in market_results_pair]
+                    self.kafka_handler.send_batch(topic, processed_data)
 
-                    if pair in self.stat_data[tf].keys():
-                        last_record = max(self.stat_data[tf][pair], key=lambda x: (x.get('trd_date', ''), x.get('trd_time', '')))
-                        last_stat_date, last_stat_time = last_record['trd_date'], last_record['trd_time']
-
-                    market_results_pair = self._calculate_pair_stat(target_market, symbol_i, symbol_j, tf, last_stat_date, last_stat_time)
-                    if market_results_pair:
-                        market_results.extend(market_results_pair)
-                        # Kafka 전송을 배치로 처리
-                        processed_data = [{
-                            'timeframe': tf,
-                            **data
-                        } for data in market_results_pair]
-                        self.kafka_handler.send_batch(topic, processed_data)
-                        print(f"통계값 계산 및 전송: {processed_data}")
-
-                # 캐시 업데이트를 배치로 처리
-                if market_results:
-                    self._update_stat_data(tf, market_results)
-                    self._update_stat_cache(tf, market_results)
+            # 캐시 업데이트
+            if market_results:
+                self._update_stat_data(timeframe, market_results)
+                self._update_stat_cache(timeframe, market_results)
 
         except Exception as e:
-            server_logger.error(f"실시간 통계값 계산 중 오류: {e}")
+            server_logger.error(f"통계값 계산 중 오류: {e}")
 
 
     def calculate_latest_pair(self):
