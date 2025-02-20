@@ -167,32 +167,24 @@ class DatabaseManager:
             cursor.executemany(query, data_list)
 
 
-    async def load_statistics_data(self, table_name: str, start_date: str = None, end_date: str = None) -> List[Dict]:
-        """통계 데이터 로드"""
+    async def load_statistics_data(self, table_name: str, max_rows: int = 2500) -> List[Dict]:
+        """통계 데이터 로드 - 각 심볼 쌍별로 최근 N개"""
         def _execute_query():
-            conditions = []
-            params = {}
-            
-            if start_date:
-                conditions.append("trd_date >= :start_date")
-                params["start_date"] = start_date
-            
-            if end_date:
-                conditions.append("trd_date < :end_date")
-                params["end_date"] = end_date
-            
-            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             query = f"""
-                SELECT 
-                    trd_date, trd_time, symbol1, symbol2, market, type,
-                    value1, value2, value3
-                FROM {table_name}
-                {where_clause}
-                ORDER BY trd_date, trd_time
+                WITH ranked_data AS (
+                    SELECT 
+                        a.*,
+                        ROW_NUMBER() OVER (PARTITION BY symbol1, symbol2 
+                                         ORDER BY trd_date DESC, trd_time DESC) as rn
+                    FROM {table_name} a
+                )
+                SELECT * FROM ranked_data 
+                WHERE rn <= :max_rows
+                ORDER BY symbol1, symbol2, trd_date, trd_time
             """
             
             with self.get_cursor() as cursor:
-                cursor.execute(query, params)
+                cursor.execute(query, {"max_rows": max_rows})
                 columns = [col[0].lower() for col in cursor.description]
                 rows = cursor.fetchall()
                 return [dict(zip(columns, row)) for row in rows]
@@ -243,32 +235,24 @@ class DatabaseManager:
         return await asyncio.to_thread(_execute_query)
 
 
-    async def load_price_data(self, table_name: str, start_date: str = None, end_date: str = None) -> List[Dict]:
-        """가격 데이터 로드"""
+    async def load_price_data(self, table_name: str, max_rows: int = 2500) -> List[Dict]:
+        """가격 데이터 로드 - 각 심볼별로 최근 N개"""
         def _execute_query():
-            conditions = []
-            params = {}
-            
-            if start_date:
-                conditions.append("trd_date >= :start_date")
-                params["start_date"] = start_date
-            
-            if end_date:
-                conditions.append("trd_date < :end_date")
-                params["end_date"] = end_date
-            
-            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             query = f"""
-                SELECT 
-                    trd_date, trd_time, symbol, open, high, low, close, 
-                    open_int, theo_prc, under_lvl, trd_volume, trd_value
-                FROM {table_name}
-                {where_clause}
-                ORDER BY trd_date, trd_time
+                WITH ranked_data AS (
+                    SELECT 
+                        a.*,
+                        ROW_NUMBER() OVER (PARTITION BY symbol 
+                                         ORDER BY trd_date DESC, trd_time DESC) as rn
+                    FROM {table_name} a
+                )
+                SELECT * FROM ranked_data 
+                WHERE rn <= :max_rows
+                ORDER BY symbol, trd_date, trd_time
             """
             
             with self.get_cursor() as cursor:
-                cursor.execute(query, params)
+                cursor.execute(query, {"max_rows": max_rows})
                 columns = [col[0].lower() for col in cursor.description]
                 rows = cursor.fetchall()
                 return [dict(zip(columns, row)) for row in rows]

@@ -66,47 +66,37 @@ class MemoryStore:
     async def _background_loading(self, db_manager):
         """백그라운드 데이터 로딩"""
         timeframes = ['1d', '30m', '15m', '10m', '5m', '3m', '1m']
-        # timeframes = ['1d'] # 임시로 일봉만 로드
+        max_rows = 2500  # 각 타임프레임당 로드할 최대 데이터 수
         
-        # 날짜 범위 설정 (최근 1주)
-        total_days = 5
-        chunk_size = 1  # 하루 단위로 처리
-        
-        end_date = datetime.now()
-        current_end = end_date
-        while total_days > 0:
-            # 종료일이 주말(토, 일)이면 평일로 조정
-            while current_end.weekday() in (5, 6):  # 5: 토요일, 6: 일요일
-                current_end -= timedelta(days=1)
+        for tf in timeframes:
+            print(f"{tf} 데이터 로드중")
+            self.loading_status[tf] = False
+            try:
+                # 통계 데이터 로드
+                statistics = await db_manager.load_statistics_data(
+                    f"statistics_price_{tf}",
+                    max_rows=max_rows
+                )
+                
+                # 가격 데이터 로드
+                prices = await db_manager.load_price_data(
+                    f"marketdata_price_{tf}",
+                    max_rows=max_rows
+                )
+                
+                # 메모리 저장소에 데이터 저장
+                if statistics:
+                    self._store_statistics_data(tf, statistics)
+                if prices:
+                    self._store_price_data(tf, prices)
+                
+                self.loading_status[tf] = True
+                self.last_update[tf] = datetime.now()
+                
+            except Exception as e:
+                self.logger.error(f"{tf} 데이터 로드 중 오류: {e}")
 
-            current_start = current_end - timedelta(days=chunk_size)
-            # 시작일이 주말(토, 일)이면 평일로 조정
-            while current_start.weekday() in (5, 6):  # 5: 토요일, 6: 일요일
-                current_start -= timedelta(days=1)
-
-            # 각 기간에 대해 모든 타임프레임의 데이터를 로드
-            for tf in timeframes:
-                # self.logger.info(f"{current_start} {tf} 데이터 로드중")
-                print(f"{current_start} {tf} 데이터 로드중")
-                self.loading_status[tf] = False
-                try:
-                    await self._load_timeframe_data(
-                        db_manager, 
-                        tf, 
-                        current_start.strftime('%Y%m%d'),
-                        current_end.strftime('%Y%m%d')
-                    )
-                    self.loading_status[tf] = True
-                    self.last_update[tf] = datetime.now()
-                    self.last_load_date[tf] = current_start
-                except Exception as e:
-                    self.logger.error(f"{tf} 데이터 로드 중 오류: {e}")
-
-            # 이전 날짜로 이동
-            current_end = current_start
-            total_days -= chunk_size
-
-        self.logger.info("백그라운드 데이터 로딩 완료")
+        print("백그라운드 데이터 로딩 완료")
 
     async def _load_timeframe_data(self, db_manager, timeframe: str, start_date: str, end_date: str):
         """타임프레임별 데이터 로드"""
